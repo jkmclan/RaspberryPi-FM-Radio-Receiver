@@ -1,5 +1,14 @@
 /*
 
+A class which reads the Clock-Wise, 
+Counter-Clock-Wise, and momentary 
+switch state changes of an incremental 
+rotary encoder using the sysfs interface 
+on a Raspberry Pi.
+
+
+Jeff McLane <jkmclane68@yahoo.com>
+
 */
 
 #include <errno.h>
