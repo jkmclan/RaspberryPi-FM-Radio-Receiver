@@ -15,6 +15,7 @@ Jeff McLane <jkmclane68@yahoo.com>
 #include <iostream>
 
 #include "RotaryEncoder.hh"
+#include "LcdI2cHD44780.hh"
 
 int main()
 {
@@ -23,19 +24,28 @@ int main()
     const int NUM_FM_FREQS = 103;
     double fm_center_freqs_MHz[NUM_FM_FREQS];
     double freq_MHz = 87.5;
+    int    stn_idx = 0;
     for (int ii=0; ii<NUM_FM_FREQS; ++ii) {
 
         fm_center_freqs_MHz[ii] = freq_MHz;
         freq_MHz += 0.200; // 200 kHz spacing
     }
 
-    RotaryEncoder* re = new RotaryEncoder();
+    // Initialize the radio frequencey dial
 
+    RotaryEncoder* re = new RotaryEncoder();
     re->init();
+
+    // Initialize the radio frequencey display
+
+    LcdI2cHD44780 lcd;
+    lcd.init();
+    lcd.clrLcd();
+    lcd.typeln("RF (MHz): ");
+    lcd.typeFloat(fm_center_freqs_MHz[stn_idx]);
 
     // Do forever
 
-    int stn_idx = 0;
     int loop_cnt = 1;
     while(loop_cnt < 1000000) {
 
@@ -46,9 +56,19 @@ int main()
             {
                 if ((stn_idx == 0) && (rs == RotaryEncoder::ROT_DECREMENT)) {
                     std::cout << "Cannot tune below : " << fm_center_freqs_MHz[stn_idx] << " MHz"<< std::endl;
+                }
+                else if ((stn_idx == NUM_FM_FREQS-1) && (rs == RotaryEncoder::ROT_INCREMENT)) {
+                    std::cout << "Cannot tune above : " << fm_center_freqs_MHz[stn_idx] << " MHz"<< std::endl;
                 } else {
                     stn_idx += rs ;
-                    std::cout << "FM Center Freq (MHz) : " <<  fm_center_freqs_MHz[stn_idx] << std::endl;
+                    char center_freq_MHz_s[10];
+                    sprintf(center_freq_MHz_s, "%5.1f", fm_center_freqs_MHz[stn_idx]);
+
+                    std::cout << "FM Center Freq (MHz) : " <<  fm_center_freqs_MHz[stn_idx] << " / " << center_freq_MHz_s << std::endl;
+
+                    lcd.lcdLoc(LINE1);
+                    lcd.typeln("RF (MHz): ");
+                    lcd.typeFloat(fm_center_freqs_MHz[stn_idx]);
                 }
                 break;
             }

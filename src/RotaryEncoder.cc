@@ -34,9 +34,11 @@ bool RotaryEncoder::init() {
     m_PinNames[ROT_DT_I]  = ROT_DT_S;
     m_PinNames[ROT_SW_I]  = ROT_SW_S;
 
+    int fd = -1;
+
     // Unexport the pin by writing to /sys/class/gpio/unexport
 
-    int fd = open("/sys/class/gpio/unexport", O_WRONLY);
+    fd = open("/sys/class/gpio/unexport", O_WRONLY);
     if (fd == -1) {
         perror("Error opening /sys/class/gpio/unexport");
         return false;
@@ -45,7 +47,7 @@ bool RotaryEncoder::init() {
     for (int ii=ROT_CLK_I; ii<=ROT_SW_I; ++ii) {
         if (write(fd, m_PinNames[ii].c_str(), m_PinNames[ii].size()) != m_PinNames[ii].size()) {
             perror("Error writing to /sys/class/gpio/unexport");
-            return false;
+            // return false;  Try not returning if the initial failure occurs after a fresh boot up
         }
     }
 

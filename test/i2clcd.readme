@@ -1,0 +1,2 @@
+
+cc i2clcd.c -I ./ -I /opt/WiringPi/wiringPi/ -lwiringPi

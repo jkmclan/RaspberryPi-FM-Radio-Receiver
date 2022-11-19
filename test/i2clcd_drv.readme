@@ -1,0 +1,2 @@
+
+g++ -g i2clcd_drv.cc ../src/LcdI2cHD44780.o -I ../src -lwiringPi
