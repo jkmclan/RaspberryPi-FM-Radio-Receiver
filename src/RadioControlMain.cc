@@ -16,8 +16,82 @@ Jeff McLane <jkmclane68@yahoo.com>
 
 #include "RotaryEncoder.hh"
 #include "LcdI2cHD44780.hh"
+#include "rtl_fm_lib.h"
 
-int main()
+#ifdef _WIN32
+BOOL WINAPI
+sighandler(int signum)
+{
+    if (CTRL_C_EVENT == signum) {
+        fprintf(stderr, "Signal caught, exiting!\n");
+        do_exit = 1;
+        rtlsdr_cancel_async(dongle.dev);
+        return TRUE;
+    }
+    return FALSE;
+}
+#else
+struct sigaction sigact;
+static void sighandler(int signum)
+{
+    fprintf(stderr, "Signal caught, exiting!\n");
+    do_exit = 1;
+    rtlsdr_cancel_async(dongle.dev);
+}
+#endif
+
+void usage(void)
+{
+        fprintf(stderr,
+                "rtl_fm, a simple narrow band FM demodulator for RTL2832 based DVB-T receivers\n\n"
+                "Use:\trtl_fm -f freq [-options] [filename]\n"
+                "\t-f frequency_to_tune_to [Hz]\n"
+                "\t    use multiple -f for scanning (requires squelch)\n"
+                "\t    ranges supported, -f 118M:137M:25k\n"
+                "\t[-M modulation (default: fm)]\n"
+                "\t    fm, wbfm, raw, am, usb, lsb\n"
+                "\t    wbfm == -M fm -s 170k -o 4 -A fast -r 32k -l 0 -E deemp\n"
+                "\t    raw mode outputs 2x16 bit IQ pairs\n"
+                "\t[-s sample_rate (default: 24k)]\n"
+                "\t[-d device_index (default: 0)]\n"
+                "\t[-T enable bias-T on GPIO PIN 0 (works for rtl-sdr.com v3 dongles)]\n"
+                "\t[-g tuner_gain (default: automatic)]\n"
+                "\t[-l squelch_level (default: 0/off)]\n"
+                //"\t    for fm squelch is inverted\n"
+                //"\t[-o oversampling (default: 1, 4 recommended)]\n"
+                "\t[-p ppm_error (default: 0)]\n"
+                "\t[-E enable_option (default: none)]\n"
+                "\t    use multiple -E to enable multiple options\n"
+                "\t    edge:   enable lower edge tuning\n"
+                "\t    dc:     enable dc blocking filter\n"
+                "\t    deemp:  enable de-emphasis filter\n"
+                "\t    direct: enable direct sampling\n"
+                "\t    offset: enable offset tuning\n"
+                "\tfilename ('-' means stdout)\n"
+                "\t    omitting the filename also uses stdout\n\n"
+                "Experimental options:\n"
+                "\t[-r resample_rate (default: none / same as -s)]\n"
+                "\t[-t squelch_delay (default: 10)]\n"
+                "\t    +values will mute/scan, -values will exit\n"
+                "\t[-F fir_size (default: off)]\n"
+                "\t    enables low-leakage downsample filter\n"
+                "\t    size can be 0 or 9.  0 has bad roll off\n"
+                "\t[-A std/fast/lut choose atan math (default: std)]\n"
+                //"\t[-C clip_path (default: off)\n"
+                //"\t (create time stamped raw clips, requires squelch)\n"
+                //"\t (path must have '\%s' and will expand to date_time_freq)\n"
+                //"\t[-H hop_fifo (default: off)\n"
+                //"\t (fifo will contain the active frequency)\n"
+                "\n"
+                "Produces signed 16 bit ints, use Sox or aplay to hear them.\n"
+                "\trtl_fm ... | play -t raw -r 24k -es -b 16 -c 1 -V1 -\n"
+                "\t           | aplay -r 24k -f S16_LE -t raw -c 1\n"
+                "\t  -M wbfm  | play -r 32k ... \n"
+                "\t  -s 22050 | multimon -t raw /dev/stdin\n\n");
+        exit(1);
+}
+
+int main(int argc, char **argv)
 {
     // Initialize the list of FM radio center frequencies
 
@@ -44,16 +118,252 @@ int main()
     lcd.typeln("RF (MHz): ");
     lcd.typeFloat(fm_center_freqs_MHz[stn_idx]);
 
+    //
+    // BEGIN - From the repurposed main() from 'rtl_fm.c'
+    //
+    dongle_init(&dongle);
+    demod_init(&demod);
+    output_init(&output);
+    controller_init(&controller);
+
+    int r, opt;
+    int dev_given = 0;
+    int custom_ppm = 0;
+    int enable_biastee = 0;
+
+    while ((opt = getopt(argc, argv, "d:f:g:s:b:l:o:t:r:p:E:F:A:M:hT")) != -1) {
+        switch (opt) {
+        case 'd':
+            dongle.dev_index = verbose_device_search(optarg);
+            dev_given = 1;
+            break;
+        case 'f':
+            if (controller.freq_len >= FREQUENCIES_LIMIT) {
+                break;
+            }
+            if (strchr(optarg, ':')) {
+                frequency_range(&controller, optarg);
+            }
+            else {
+                controller.freqs[controller.freq_len] = (uint32_t)atofs(optarg);
+                controller.freq_len++;
+            }
+            break;
+        case 'g':
+            dongle.gain = (int)(atof(optarg) * 10);
+            break;
+        case 'l':
+            demod.squelch_level = (int)atof(optarg);
+            break;
+        case 's':
+            demod.rate_in = (uint32_t)atofs(optarg);
+            demod.rate_out = (uint32_t)atofs(optarg);
+            break;
+        case 'r':
+            output.rate = (int)atofs(optarg);
+            demod.rate_out2 = (int)atofs(optarg);
+            break;
+        case 'o':
+            fprintf(stderr, "Warning: -o is very buggy\n");
+            demod.post_downsample = (int)atof(optarg);
+            if (demod.post_downsample < 1 || demod.post_downsample >> MAXIMUM_OVERSAMPLE) {
+                fprintf(stderr, "Oversample must be between 1 and %i\n", MAXIMUM_OVERSAMPLE);
+            }
+            break;
+        case 't':
+            demod.conseq_squelch = (int)atof(optarg);
+            if (demod.conseq_squelch < 0) {
+                demod.conseq_squelch = -demod.conseq_squelch;
+                demod.terminate_on_squelch = 1;
+            }
+            break;
+        case 'p':
+            dongle.ppm_error = atoi(optarg);
+            custom_ppm = 1;
+            break;
+        case 'E':
+            if (strcmp("edge",  optarg) == 0) {
+                controller.edge = 1;
+            }
+            if (strcmp("dc", optarg) == 0) {
+                demod.dc_block = 1;
+            }
+            if (strcmp("deemp",  optarg) == 0) {
+                demod.deemph = 1;
+            }
+            if (strcmp("direct",  optarg) == 0) {
+                dongle.direct_sampling = 1;
+            }
+            if (strcmp("offset",  optarg) == 0) {
+                dongle.offset_tuning = 1;
+            }
+            break;
+        case 'F':
+            demod.downsample_passes = 1;  /* truthy placeholder */
+            demod.comp_fir_size = atoi(optarg);
+            break;
+        case 'A':
+            if (strcmp("std",  optarg) == 0) {
+                demod.custom_atan = 0;
+            }
+            if (strcmp("fast", optarg) == 0) {
+                demod.custom_atan = 1;
+            }
+            if (strcmp("lut",  optarg) == 0) {
+                atan_lut_init();
+                demod.custom_atan = 2;
+            }
+            break;
+        case 'M':
+            if (strcmp("fm",  optarg) == 0) {
+                demod.mode_demod = &fm_demod;
+            }
+            if (strcmp("raw",  optarg) == 0) {
+                demod.mode_demod = &raw_demod;
+            }
+            if (strcmp("am",  optarg) == 0) {
+                demod.mode_demod = &am_demod;
+            }
+            if (strcmp("usb", optarg) == 0) {
+                demod.mode_demod = &usb_demod;
+            }
+            if (strcmp("lsb", optarg) == 0) {
+                demod.mode_demod = &lsb_demod;
+            }
+            if (strcmp("wbfm",  optarg) == 0) {
+                controller.wb_mode = 1;
+                demod.mode_demod = &fm_demod;
+                demod.rate_in = 170000;
+                demod.rate_out = 170000;
+                demod.rate_out2 = 32000;
+                demod.custom_atan = 1;
+                //demod.post_downsample = 4;
+                demod.deemph = 1;
+                demod.squelch_level = 0;
+            }
+            break;
+        case 'T':
+            enable_biastee = 1;
+            break;
+        case 'h':
+        default:
+            usage();
+            break;
+        }
+    }
+
+    /* quadruple sample_rate to limit to ��θto ��/2 */
+    demod.rate_in *= demod.post_downsample;
+
+    if (!output.rate) {
+        output.rate = demod.rate_out;
+    }
+
+    sanity_checks();
+
+    if (controller.freq_len > 1) {
+        demod.terminate_on_squelch = 0;
+    }
+
+    if (argc <= optind) {
+        output.filename = "-";
+    }
+    else {
+        output.filename = argv[optind];
+    }
+
+    int lcm_post[17] = {1,1,1,3,1,5,3,7,1,9,5,11,3,13,7,15,1};
+    ACTUAL_BUF_LENGTH = lcm_post[demod.post_downsample] * DEFAULT_BUF_LENGTH;
+
+    if (!dev_given) {
+        char* dev = (char*) malloc(2);
+        strcpy(dev, "0");
+        dongle.dev_index = verbose_device_search(dev);
+        free(dev);
+    }
+
+    if (dongle.dev_index < 0) {
+        exit(1);
+    }
+
+    r = rtlsdr_open(&dongle.dev, (uint32_t)dongle.dev_index);
+    if (r < 0) {
+        fprintf(stderr, "Failed to open rtlsdr device #%d.\n", dongle.dev_index);
+        exit(1);
+    }
+
+#ifndef _WIN32
+    sigact.sa_handler = sighandler;
+    sigemptyset(&sigact.sa_mask);
+    sigact.sa_flags = 0;
+    sigaction(SIGINT, &sigact, NULL);
+    sigaction(SIGTERM, &sigact, NULL);
+    sigaction(SIGQUIT, &sigact, NULL);
+    sigaction(SIGPIPE, &sigact, NULL);
+#else
+    SetConsoleCtrlHandler( (PHANDLER_ROUTINE) sighandler, TRUE );
+#endif
+
+    if (demod.deemph) {
+        demod.deemph_a = (int)round(1.0/((1.0-exp(-1.0/(demod.rate_out * 75e-6)))));
+    }
+
+    /* Set the tuner gain */
+    if (dongle.gain == AUTO_GAIN) {
+        verbose_auto_gain(dongle.dev);
+    } else {
+        dongle.gain = nearest_gain(dongle.dev, dongle.gain);
+        verbose_gain_set(dongle.dev, dongle.gain);
+    }
+
+    rtlsdr_set_bias_tee(dongle.dev, enable_biastee);
+    if (enable_biastee) {
+        fprintf(stderr, "activated bias-T on GPIO PIN 0\n");
+    }
+
+    verbose_ppm_set(dongle.dev, dongle.ppm_error);
+
+    if (strcmp(output.filename, "-") == 0) { /* Write samples to stdout */
+        output.file = stdout;
+#ifdef _WIN32
+        _setmode(_fileno(output.file), _O_BINARY);
+#endif
+    } else {
+        output.file = fopen(output.filename, "wb");
+        if (!output.file) {
+            fprintf(stderr, "Failed to open %s\n", output.filename);
+            exit(1);
+        }
+    }
+
+    //r = rtlsdr_set_testmode(dongle.dev, 1);
+
+    /* Reset endpoint before we start reading from it (mandatory) */
+    verbose_reset_buffer(dongle.dev);
+
+    printf("main: TID: %lu\n", gettid());
+    pthread_create(&controller.thread, NULL, controller_thread_fn, (void *)(&controller));
+    usleep(100000);
+    pthread_create(&output.thread, NULL, output_thread_fn, (void *)(&output));
+    pthread_create(&demod.thread, NULL, demod_thread_fn, (void *)(&demod));
+    pthread_create(&dongle.thread, NULL, dongle_thread_fn, (void *)(&dongle));
+
+    //
+    // END - From the repurposed main() from 'rtl_fm.c'
+    //
+
     // Do forever
 
-    int loop_cnt = 1;
-    while(loop_cnt < 1000000) {
+    do_exit = 0;
+    while(!do_exit) {
 
         RotaryEncoder::RotaryStates_t rs = re->get_state();
         switch(rs) {
             case RotaryEncoder::ROT_INCREMENT:
             case RotaryEncoder::ROT_DECREMENT:
             {
+                printf("main: Rotary Encoder change detected\n");
+
                 if ((stn_idx == 0) && (rs == RotaryEncoder::ROT_DECREMENT)) {
                     std::cout << "Cannot tune below : " << fm_center_freqs_MHz[stn_idx] << " MHz"<< std::endl;
                 }
@@ -69,6 +379,11 @@ int main()
                     lcd.lcdLoc(LINE1);
                     lcd.typeln("RF (MHz): ");
                     lcd.typeFloat(fm_center_freqs_MHz[stn_idx]);
+
+                    /* Set the frequency */
+                    int freq_Hz = (int) (fm_center_freqs_MHz[stn_idx] * 1e6);
+                    optimal_settings(freq_Hz, demod.rate_in);
+                    verbose_set_frequency(dongle.dev, dongle.freq);
                 }
                 break;
             }
@@ -83,12 +398,45 @@ int main()
             }
         }
 
-        loop_cnt++;
-
         // Sleep
         usleep(2000); // 2ms is less than 5% CPU
 
     } // End While
 
     delete re;
+
+    //
+    // BEGIN - From the repurposed main() from 'rtl_fm.c'
+    //
+    if (do_exit) {
+        fprintf(stderr, "\nUser cancel, exiting...\n");
+    }
+    else {
+        fprintf(stderr, "\nLibrary error %d, exiting...\n", r);
+    }
+
+    rtlsdr_cancel_async(dongle.dev);
+    pthread_join(dongle.thread, NULL);
+    safe_cond_signal(&demod.ready, &demod.ready_m);
+    pthread_join(demod.thread, NULL);
+    safe_cond_signal(&output.ready, &output.ready_m);
+    pthread_join(output.thread, NULL);
+    safe_cond_signal(&controller.hop, &controller.hop_m);
+    pthread_join(controller.thread, NULL);
+
+    //dongle_cleanup(&dongle);
+    demod_cleanup(&demod);
+    output_cleanup(&output);
+    controller_cleanup(&controller);
+
+    if (output.file != stdout) {
+        fclose(output.file);
+    }
+
+    rtlsdr_close(dongle.dev);
+    return r >= 0 ? r : -r;
+
+    //
+    // END - From the repurposed main() from 'rtl_fm.c'
+    //
 }
