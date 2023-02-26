@@ -10,33 +10,150 @@ Jeff McLane <jkmclane68@yahoo.com>
 */
 
 #include <stdio.h>
+#include <signal.h>
 #include <unistd.h>
-
 #include <iostream>
 
-#include "RotaryEncoder.hh"
+#include "QueueThreadSafe.hh"
+#include "RotaryEncoderEvent.hh"
 #include "LcdI2cHD44780.hh"
 #include "rtl_fm_lib.h"
+#include "RadioControlMain.hh"
+
+RadioControlMain::RadioControlMain() :
+    m_rotary_encoder(NULL),
+    m_tune_queue(NULL)
+{
+}
+
+RadioControlMain::~RadioControlMain() {
+
+    int* thread_stat;
+    pthread_join(m_rotary_encoder_thread, (void**) &thread_stat);
+    printf("RadioControlMain::~RadioControlMain : joined with m_rotary_encoder_thread\n");
+
+    if (m_rotary_encoder != NULL) delete m_rotary_encoder;
+    if (m_tune_queue != NULL) delete m_tune_queue;
+}
+
+bool RadioControlMain::init() {
+
+    #ifdef _WIN32
+    SetConsoleCtrlHandler( (PHANDLER_ROUTINE) sighandler, TRUE );
+    #else
+    struct sigaction sigact;
+    sigact.sa_handler = sighandler;
+    sigemptyset(&sigact.sa_mask);
+    sigact.sa_flags = 0;
+    sigaction(SIGINT, &sigact, NULL);
+    sigaction(SIGTERM, &sigact, NULL);
+    sigaction(SIGQUIT, &sigact, NULL);
+    sigaction(SIGPIPE, &sigact, NULL);
+    #endif
+
+    // Initialize the list of FM radio center frequencies
+
+    double freq_MHz = 87.5;
+    m_stn_idx = 0;
+    for (int ii=0; ii<NUM_FM_FREQS; ++ii) {
+
+        m_fm_center_freqs_MHz[ii] = freq_MHz;
+        freq_MHz += 0.200; // 200 kHz spacing
+    }
+
+    // Initialize the RTL-SDR tuned frequency
+
+    controller.freqs[controller.freq_len++] = m_fm_center_freqs_MHz[m_stn_idx] * 1e6;
+
+    //
+    // Initialize and start a thread to monitor the radio frequency dial
+    //
+
+    m_tune_queue = new QueueThreadSafe<RotaryEncoderEvent::RotaryStates>(do_exit);
+
+    m_rotary_encoder = new RotaryEncoderEvent(&do_exit, m_tune_queue);
+    bool rotary_encoder_status = m_rotary_encoder->init();
+    m_rotary_encoder_thread = m_rotary_encoder->run();
+
+    //
+    // Initialize the radio frequency display
+    //
+
+    m_lcd.init();
+    m_lcd.clrLcd();
+    m_lcd.typeln("RF (MHz): ");
+    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
+
+    return true;
+}
+
+void RadioControlMain::wait_for_frequency_change() {
+
+        printf("RadioControlMain::wait_for_frequency_change : waiting to pop\n");
+        RotaryEncoderEvent::RotaryStates rs = m_tune_queue->pop();
+        printf("RadioControlMain::wait_for_frequency_change : popped %d\n", rs);
+
+        switch(rs) {
+            case RotaryEncoderEvent::ROT_INCREMENT:
+            case RotaryEncoderEvent::ROT_DECREMENT:
+            {
+                printf("RadioControlMain::change_frequency: frequency change detected\n");
+
+                if ((m_stn_idx == 0) && (rs == RotaryEncoderEvent::ROT_DECREMENT)) {
+                    std::cout << "Cannot tune below : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
+                }
+                else if ((m_stn_idx == NUM_FM_FREQS-1) && (rs == RotaryEncoderEvent::ROT_INCREMENT)) {
+                    std::cout << "Cannot tune above : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
+                } else {
+                    m_stn_idx += rs ;
+                    char center_freq_MHz_s[10];
+                    sprintf(center_freq_MHz_s, "%5.1f", m_fm_center_freqs_MHz[m_stn_idx]);
+
+                    std::cout << "FM Center Freq (MHz) : " <<  m_fm_center_freqs_MHz[m_stn_idx] << " / " << center_freq_MHz_s << std::endl;
+
+                    //
+                    // Update the frequency
+                    //
+
+                    // In the LCD display
+//                    m_lcd.lcdLoc(LINE1);
+//                    m_lcd.typeln("RF (MHz): ");
+//                    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
+
+                    // In the RTL-SDR dongle
+                    int freq_Hz = (int) (m_fm_center_freqs_MHz[m_stn_idx] * 1e6);
+                    optimal_settings(freq_Hz, demod.rate_in);
+                    verbose_set_frequency(dongle.dev, dongle.freq);
+                }
+                break;
+            }
+            case RotaryEncoderEvent::ROT_SW_PUSHED:
+            {
+                std::cout << "SW : PUSHED" << std::endl;
+                break;
+            }
+            default:
+            {
+                break;
+            }
+        }
+}
 
 #ifdef _WIN32
-BOOL WINAPI
-sighandler(int signum)
+BOOL WINAPI RadioControlMain::sighandler(int signum)
 {
     if (CTRL_C_EVENT == signum) {
         fprintf(stderr, "Signal caught, exiting!\n");
         do_exit = 1;
-        rtlsdr_cancel_async(dongle.dev);
         return TRUE;
     }
     return FALSE;
 }
 #else
-struct sigaction sigact;
-static void sighandler(int signum)
+void RadioControlMain::sighandler(int signum)
 {
     fprintf(stderr, "Signal caught, exiting!\n");
     do_exit = 1;
-    rtlsdr_cancel_async(dongle.dev);
 }
 #endif
 
@@ -93,31 +210,6 @@ void usage(void)
 
 int main(int argc, char **argv)
 {
-    // Initialize the list of FM radio center frequencies
-
-    const int NUM_FM_FREQS = 103;
-    double fm_center_freqs_MHz[NUM_FM_FREQS];
-    double freq_MHz = 87.5;
-    int    stn_idx = 0;
-    for (int ii=0; ii<NUM_FM_FREQS; ++ii) {
-
-        fm_center_freqs_MHz[ii] = freq_MHz;
-        freq_MHz += 0.200; // 200 kHz spacing
-    }
-
-    // Initialize the radio frequencey dial
-
-    RotaryEncoder* re = new RotaryEncoder();
-    re->init();
-
-    // Initialize the radio frequencey display
-
-    LcdI2cHD44780 lcd;
-    lcd.init();
-    lcd.clrLcd();
-    lcd.typeln("RF (MHz): ");
-    lcd.typeFloat(fm_center_freqs_MHz[stn_idx]);
-
     //
     // BEGIN - From the repurposed main() from 'rtl_fm.c'
     //
@@ -125,6 +217,13 @@ int main(int argc, char **argv)
     demod_init(&demod);
     output_init(&output);
     controller_init(&controller);
+
+    // NEW -- Create and initialize the Radio Controller
+
+    RadioControlMain rcm;
+    rcm.init();
+
+    // END NEW -- Create and initialize the Radio Controller
 
     int r, opt;
     int dev_given = 0;
@@ -292,18 +391,6 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-#ifndef _WIN32
-    sigact.sa_handler = sighandler;
-    sigemptyset(&sigact.sa_mask);
-    sigact.sa_flags = 0;
-    sigaction(SIGINT, &sigact, NULL);
-    sigaction(SIGTERM, &sigact, NULL);
-    sigaction(SIGQUIT, &sigact, NULL);
-    sigaction(SIGPIPE, &sigact, NULL);
-#else
-    SetConsoleCtrlHandler( (PHANDLER_ROUTINE) sighandler, TRUE );
-#endif
-
     if (demod.deemph) {
         demod.deemph_a = (int)round(1.0/((1.0-exp(-1.0/(demod.rate_out * 75e-6)))));
     }
@@ -357,53 +444,10 @@ int main(int argc, char **argv)
     do_exit = 0;
     while(!do_exit) {
 
-        RotaryEncoder::RotaryStates_t rs = re->get_state();
-        switch(rs) {
-            case RotaryEncoder::ROT_INCREMENT:
-            case RotaryEncoder::ROT_DECREMENT:
-            {
-                printf("main: Rotary Encoder change detected\n");
-
-                if ((stn_idx == 0) && (rs == RotaryEncoder::ROT_DECREMENT)) {
-                    std::cout << "Cannot tune below : " << fm_center_freqs_MHz[stn_idx] << " MHz"<< std::endl;
-                }
-                else if ((stn_idx == NUM_FM_FREQS-1) && (rs == RotaryEncoder::ROT_INCREMENT)) {
-                    std::cout << "Cannot tune above : " << fm_center_freqs_MHz[stn_idx] << " MHz"<< std::endl;
-                } else {
-                    stn_idx += rs ;
-                    char center_freq_MHz_s[10];
-                    sprintf(center_freq_MHz_s, "%5.1f", fm_center_freqs_MHz[stn_idx]);
-
-                    std::cout << "FM Center Freq (MHz) : " <<  fm_center_freqs_MHz[stn_idx] << " / " << center_freq_MHz_s << std::endl;
-
-                    lcd.lcdLoc(LINE1);
-                    lcd.typeln("RF (MHz): ");
-                    lcd.typeFloat(fm_center_freqs_MHz[stn_idx]);
-
-                    /* Set the frequency */
-                    int freq_Hz = (int) (fm_center_freqs_MHz[stn_idx] * 1e6);
-                    optimal_settings(freq_Hz, demod.rate_in);
-                    verbose_set_frequency(dongle.dev, dongle.freq);
-                }
-                break;
-            }
-            case RotaryEncoder::ROT_SW_PUSHED:
-            {
-                std::cout << "SW : PUSHED" << std::endl;
-                break;
-            }
-            default:
-            {
-                break;
-            }
-        }
-
-        // Sleep
-        usleep(2000); // 2ms is less than 5% CPU
+        // Wait for asynchronous frequency changes
+        rcm.wait_for_frequency_change();
 
     } // End While
-
-    delete re;
 
     //
     // BEGIN - From the repurposed main() from 'rtl_fm.c'
@@ -415,6 +459,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "\nLibrary error %d, exiting...\n", r);
     }
 
+    //rtlsdr_cancel_async(dongle.dev); // this redundant invocation was removed from sighandler()
     rtlsdr_cancel_async(dongle.dev);
     pthread_join(dongle.thread, NULL);
     safe_cond_signal(&demod.ready, &demod.ready_m);
