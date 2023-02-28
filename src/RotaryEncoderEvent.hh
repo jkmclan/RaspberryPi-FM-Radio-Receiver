@@ -1,9 +1,10 @@
 /*
 
-A class which reads the Clock-Wise, 
-Counter-Clock-Wise, and momentary 
-switch state changes of an incremental 
-rotary encoder using interrupts
+A class which reads the Clock-Wise,
+Counter-Clock-Wise, and momentary
+switch state changes of an incremental
+rotary encoder using the gpiod library
+for interrupt-based queue events.
 
 Jeff McLane <jkmclane68@yahoo.com>
 
@@ -15,6 +16,10 @@ Jeff McLane <jkmclane68@yahoo.com>
 
 template <typename T>
 class QueueThreadSafe;
+
+#define PIN_CLK 23
+#define PIN_DT  24
+#define PIN_SW  25
 
 class RotaryEncoderEvent {
 
@@ -39,8 +44,6 @@ public:
 protected:
 
 private:
-
-    //RotaryEncoderEvent() {};
 
     typedef struct mon_ctx {
 
@@ -75,30 +78,37 @@ private:
 
     static void* start(void* data);
 
-    //static gpiod_ctxless_event_poll_cb poll_callback(unsigned int num_lines,
     static int poll_callback(unsigned int num_lines,
-                                              struct gpiod_ctxless_event_poll_fd *fds,
-                                              const struct timespec *timeout,
-                                              void *data);
+                             struct gpiod_ctxless_event_poll_fd *fds,
+                             const struct timespec *timeout,
+                             void *data);
 
-    //static gpiod_ctxless_event_handle_cb event_callback(int event_type,
     static int event_callback(int event_type,
-                                                 unsigned int line_offset,
-                                                 const struct timespec *timestamp,
-                                                 void *data);
+                              unsigned int line_offset,
+                              const struct timespec *timestamp,
+                              void *data);
 
     static void handle_event(thread_data_t* thread_data,
-                      int event_type,
-                      int line_offset,
-                      const struct timespec *timestamp);
+                             int event_type,
+                             int line_offset,
+                             const struct timespec *timestamp);
 
     int make_signalfd();
 
     static void event_print_human_readable(unsigned int offset,
-                                       const struct timespec *ts,
-                                       int event_type,
-                                       const struct timespec& rt_timestamp,
-                                       const struct timespec& mono_timestamp);
+                                           const struct timespec *ts,
+                                           int event_type,
+                                           const struct timespec& now_ts);
+
+    static timespec diff_timespec(int& offset,
+                                  timespec& now,
+                                  timespec* first_ts,
+                                  thread_data_t* thread_data);
+
+    static timespec* check_debouncing_timeout(int& offset,
+                                              timespec* first_active_ts,
+                                              timespec& diff_ts,
+                                              thread_data_t* thread_data);
 
     static QueueThreadSafe<RotaryEncoderEvent::RotaryStates>* s_tune_queue;
 

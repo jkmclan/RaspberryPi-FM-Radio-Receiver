@@ -3,8 +3,8 @@
 A class which reads the Clock-Wise, 
 Counter-Clock-Wise, and momentary 
 switch state changes of an incremental 
-rotary encoder using the sysfs interface 
-on a Raspberry Pi.
+rotary encoder using the gpiod library
+for interrupt-based queue events.
 
 
 Jeff McLane <jkmclane68@yahoo.com>
@@ -47,10 +47,10 @@ bool RotaryEncoderEvent::init() {
 
     strcpy(m_thread_data.gpio_chip_name, "gpiochip0");
     m_thread_data.event_type = GPIOD_CTXLESS_EVENT_RISING_EDGE;
-    m_thread_data.offsets[0] = 23; // CLK
-    m_thread_data.offsets[1] = 24; // DT
-    m_thread_data.offsets[2] = 25; // SWITCH
-    m_thread_data.num_lines = 2;
+    m_thread_data.offsets[0] = PIN_CLK; // CLK
+    m_thread_data.offsets[1] = PIN_DT; // DT
+    m_thread_data.offsets[2] = PIN_SW; // SWITCH
+    m_thread_data.num_lines = 3;
     m_thread_data.active_low = true;
     strcpy(m_thread_data.consumer, "JeffsRadio");
     m_thread_data.timeout = { 2, 0 };
@@ -132,10 +132,9 @@ int RotaryEncoderEvent::make_signalfd(void)
 }
 
 void RotaryEncoderEvent::event_print_human_readable(unsigned int offset,
-                                const struct timespec *ts,
-                                int event_type,
-                                const struct timespec& rt_timestamp,
-                                const struct timespec& mono_timestamp)
+                                                    const struct timespec *ts,
+                                                    int event_type,
+                                                    const struct timespec& now_ts)
 {
     char evname[32];
 
@@ -144,17 +143,15 @@ void RotaryEncoderEvent::event_print_human_readable(unsigned int offset,
     else
         strcpy(evname, "FALLING EDGE");
 
-    printf("event: %s offset: %u timestamp: [%8ld.%09ld]  RT: [%8ld.%09ld]  MONO: [%8ld.%09ld]\n",
+    printf("event: %s offset: %u Event Generated Time (MONOTONIC) : [%8ld.%09ld]  : Event Handled Time (MONOTONIC) : [%8ld.%09ld]\n",
            evname, offset, ts->tv_sec, ts->tv_nsec,
-           rt_timestamp.tv_sec, rt_timestamp.tv_nsec,
-           mono_timestamp.tv_sec, mono_timestamp.tv_nsec);
+           now_ts.tv_sec, now_ts.tv_nsec);
 }
 
-//gpiod_ctxless_event_poll_cb RotaryEncoderEvent::poll_callback(unsigned int num_lines,
 int RotaryEncoderEvent::poll_callback(unsigned int num_lines,
-                  struct gpiod_ctxless_event_poll_fd *fds,
-                  const struct timespec *timeout,
-                  void *data)
+                                      struct gpiod_ctxless_event_poll_fd *fds,
+                                      const struct timespec *timeout,
+                                      void *data)
 {
     struct pollfd pfds[GPIOD_LINE_BULK_MAX_LINES + 1];
     thread_data_t* thread_data = (thread_data_t*) data;
@@ -195,19 +192,15 @@ int RotaryEncoderEvent::poll_callback(unsigned int num_lines,
      * If we're here, then there's a signal pending. No need to read it,
      * we know we should quit now.
     */
-/*
-    close(thread_data->ctx.sigfd);
-
-    return GPIOD_CTXLESS_EVENT_POLL_RET_STOP;
-*/
+    //close(thread_data->ctx.sigfd);
+    //return GPIOD_CTXLESS_EVENT_POLL_RET_STOP;
 
 }
 
-//gpiod_ctxless_event_handle_cb RotaryEncoderEvent::event_callback(int event_type,
 int RotaryEncoderEvent::event_callback(int event_type,
-                   unsigned int line_offset,
-                   const struct timespec *timestamp,
-                   void *data)
+                                       unsigned int line_offset,
+                                       const struct timespec *timestamp,
+                                       void *data)
 {
         thread_data_t* thread_data = (thread_data_t*) data;
 
@@ -225,7 +218,8 @@ int RotaryEncoderEvent::event_callback(int event_type,
                 return GPIOD_CTXLESS_EVENT_CB_RET_OK;
         }
 
-        if (thread_data->ctx.events_wanted && thread_data->ctx.events_done >= thread_data->ctx.events_wanted)
+        if (thread_data->ctx.events_wanted &&
+            thread_data->ctx.events_done >= thread_data->ctx.events_wanted)
                 return GPIOD_CTXLESS_EVENT_CB_RET_STOP;
 
         return GPIOD_CTXLESS_EVENT_CB_RET_OK;
@@ -236,240 +230,163 @@ void RotaryEncoderEvent::handle_event(thread_data_t* p_thread_data,
                                       int p_offset,
                                       const struct timespec *p_timestamp)
 {
-    static struct timespec* a_ts = NULL;
-    static struct timespec* b_ts = NULL;
+    static struct timespec* first_active_ts = NULL;
 
-    static bool state_sent = false;
+    static RotaryEncoderEvent::RotaryStates_t rs = ROT_NC;
 
     p_thread_data->ctx.events_done++;
 
-    if (!p_thread_data->ctx.silent) {
-        struct timespec rt_timestamp;
-        if (clock_gettime(CLOCK_REALTIME, &rt_timestamp) == -1) {
-            perror("clock_gettime(CLOCK_REALTIME error");
-        }
-
-        struct timespec mono_timestamp;
-        if (clock_gettime(CLOCK_MONOTONIC, &mono_timestamp) == -1) {
-            perror("clock_gettime(CLOCK_MONOTONIC error");
-        }
-
-        event_print_human_readable(p_offset, p_timestamp, p_event_type, rt_timestamp, mono_timestamp);
-    }
-
-    RotaryEncoderEvent::RotaryStates_t rs = ROT_NC;
-
+    // Get current timestamp
     struct timespec now_ts;
     clock_gettime(CLOCK_MONOTONIC, &now_ts);
 
-    if (p_offset == 23) {
-        //
-        // Debounce
-        //
-
-/*
-        const int num_pins = 2;
-        unsigned int offsets[num_pins] = { 23, 24 };
-        int* values = (int*) malloc(sizeof(*values) * num_pins);
-        int rv = gpiod_ctxless_get_value_multiple(thread_data->gpio_chip_name,
-                                                      offsets,
-                                                      values,
-                                                      num_pins,
-                                                      thread_data->active_low,
-                                                      thread_data->consumer);
-                                                      //thread_data->flags);
-        if (rv = -1) perror("gpiod_ctxless_get_value_multiple - errno");
-        int a = values[0];
-        int b = values[1];
-        free(values);
-*/
-        unsigned int offset = 24;
-        int value;
-/*
-        value = gpiod_ctxless_get_value(p_thread_data->gpio_chip_name,
-                                                offset,
-                                                p_thread_data->active_low,
-                                                p_thread_data->consumer);
-                                                //p_thread_data->flags);
-        if (value = -1) perror("gpiod_ctxless_get_value_ext - errno");
-*/
-
-/*
-        const char *device = p_thread_data->gpio_chip_name;
-        const unsigned int *offsets = &offset;
-        int *values = &value;
-        unsigned int num_lines = 1;
-        bool active_low = p_thread_data->active_low;
-        const char *consumer = p_thread_data->consumer;
-        int flags = 0;
-
-        struct gpiod_line_bulk bulk;
-        struct gpiod_chip *chip;
-        struct gpiod_line *line;
-        unsigned int i;
-        int rv, req_flags;
-
-        if (!num_lines || num_lines > GPIOD_LINE_BULK_MAX_LINES) {
-                errno = EINVAL;
-                return;
-        }
-
-        chip = gpiod_chip_open_lookup(device);
-        if (!chip)
-                return;
-
-        gpiod_line_bulk_init(&bulk);
-
-        for (i = 0; i < num_lines; i++) {
-                line = gpiod_chip_get_line(chip, offsets[i]);
-                if (!line) {
-                        gpiod_chip_close(chip);
-                        return;
-                }
-
-                gpiod_line_bulk_add(&bulk, line);
-        }
-
-        req_flags = GPIOD_LINE_REQUEST_FLAG_ACTIVE_LOW;
-        rv = gpiod_line_request_bulk_input_flags(&bulk, consumer, req_flags);
-        if (rv < 0) {
-                gpiod_chip_close(chip);
-                return;
-        }
-
-        memset(values, 0, sizeof(*values) * num_lines);
-        rv = gpiod_line_get_value_bulk(&bulk, values);
-
-        gpiod_chip_close(chip);
-*/
-///////////////////
-/*
-        int a = 1;
-        int b = value;
-        printf("a | b : %d | %d\n", a, b);
-
-        if (a != a0) {              // A changed
-            a0 = a;
-            if (b != c0) {
-                c0 = b;
-                if (a == b) {
-                    rs = ROT_INCREMENT;
-                    a0 = 0;
-                    c0 = 0;
-                } else {
-                    rs = ROT_DECREMENT;
-                    a0 = 0;
-                    c0 = 0;
-                }
-            }
-        }
-*/
-//////////////////////
-        if (!p_thread_data->ctx.silent) printf("%d - Here 1\n", p_offset);
-        struct timespec diff_ts;
-        if (a_ts != NULL) {
-            diff_ts.tv_sec = now_ts.tv_sec - a_ts->tv_sec;
-            diff_ts.tv_nsec = now_ts.tv_nsec - a_ts->tv_nsec;
-        } else if (b_ts != NULL) {
-            diff_ts.tv_sec = now_ts.tv_sec - b_ts->tv_sec;
-            diff_ts.tv_nsec = now_ts.tv_nsec - b_ts->tv_nsec;
-        }
-        if (diff_ts.tv_nsec < 0) {
-            diff_ts.tv_nsec += 1000000000; // nsec/sec
-            diff_ts.tv_sec--;
-        }
-
-        if (!p_thread_data->ctx.silent) printf("%d - Here 2 - diff_ts = [%8ld.%09ld]\n", p_offset, diff_ts.tv_sec, diff_ts.tv_nsec);
-        //if ( (diff_ts.tv_sec > 0) || (diff_ts.tv_nsec > 117725912) ) {
-        if ( (diff_ts.tv_sec > 0) || (diff_ts.tv_nsec > 250000000) ) {
-            if (!p_thread_data->ctx.silent) printf("%d - Here 3\n", p_offset);
-
-            if (a_ts != NULL) {
-                if (!p_thread_data->ctx.silent) printf("%d - Here 4\n", p_offset);
-                delete a_ts;
-                a_ts = NULL;
-            }
-
-            if (b_ts != NULL) {
-                if (!p_thread_data->ctx.silent) printf("%d - Here 5\n", p_offset);
-                delete b_ts;
-                b_ts = NULL;
-            }
-            state_sent = false;
-        }
-
-        if ((b_ts == NULL) && (a_ts == NULL)) {
-            if (!p_thread_data->ctx.silent) printf("%d - Here 6\n", p_offset);
-            a_ts = new timespec();
-            clock_gettime(CLOCK_MONOTONIC, a_ts);
-        }
-    } else if (p_offset == 24) {
-        if (!p_thread_data->ctx.silent) printf("%d - Here 1\n", p_offset);
-
-        struct timespec diff_ts;
-        if (a_ts != NULL) {
-            diff_ts.tv_sec = now_ts.tv_sec - a_ts->tv_sec;
-            diff_ts.tv_nsec = now_ts.tv_nsec - a_ts->tv_nsec;
-        } else if (b_ts != NULL) {
-            diff_ts.tv_sec = now_ts.tv_sec - b_ts->tv_sec;
-            diff_ts.tv_nsec = now_ts.tv_nsec - b_ts->tv_nsec;
-        }
-        if (diff_ts.tv_nsec < 0) {
-            diff_ts.tv_nsec += 1000000000; // nsec/sec
-            diff_ts.tv_sec--;
-        }
-
-        if (!p_thread_data->ctx.silent) printf("%d - Here 2 - diff_ts = [%8ld.%09ld]\n", p_offset, diff_ts.tv_sec, diff_ts.tv_nsec);
-        if ( (diff_ts.tv_sec > 0) || (diff_ts.tv_nsec > 250000000) ) {
-            if (!p_thread_data->ctx.silent) printf("%d - Here 3\n", p_offset);
-
-            if (a_ts != NULL) {
-                if (!p_thread_data->ctx.silent) printf("%d - Here 4\n", p_offset);
-                delete a_ts;
-                a_ts = NULL;
-            }
-
-            if (b_ts != NULL) {
-                if (!p_thread_data->ctx.silent) printf("%d - Here 5\n", p_offset);
-                delete b_ts;
-                b_ts = NULL;
-            }
-            state_sent = false;
-        }
-
-
-        if ((a_ts == NULL) && (b_ts == NULL)) {
-            if (!p_thread_data->ctx.silent) printf("%d - Here 6\n", p_offset);
-            b_ts = new timespec();
-            clock_gettime(CLOCK_MONOTONIC, b_ts);
-        }
-//////////////////////
-    } else if (p_offset == 25) {
-        rs = ROT_SW_PUSHED;
+    // Logging - Event Timing
+    if (!p_thread_data->ctx.silent) {
+        event_print_human_readable(p_offset, p_timestamp, p_event_type, now_ts);
     }
 
-    if (!p_thread_data->ctx.silent) printf("%d - Here 7\n", p_offset);
+    //
+    // Identify which offset (aka pin number) is active
+    //
 
-    if (!state_sent && (a_ts != NULL) && (b_ts == NULL)) {
-        if (!p_thread_data->ctx.silent) printf("%d - Here 8\n", p_offset);
-        rs = ROT_INCREMENT;
-        state_sent = true;
+    switch (p_offset) {
+
+    case PIN_CLK: {
+        if (!p_thread_data->ctx.silent) printf("%d - Here 1\n", p_offset);
+
+        // Get the period from now to the first active pin detection
+        timespec diff_ts = diff_timespec(p_offset, now_ts, first_active_ts, p_thread_data);
+
+        // Determine whether this event is a bounce or a new active rotation
+        first_active_ts = check_debouncing_timeout(p_offset, first_active_ts, diff_ts, p_thread_data);
+
+        if (first_active_ts == NULL) {
+
+            //
+            // Detected clockwise rotation
+            //
+
+            if (!p_thread_data->ctx.silent) printf("%d - Here 5\n", p_offset);
+            first_active_ts = new timespec();
+            clock_gettime(CLOCK_MONOTONIC, first_active_ts);
+ 
+            rs = ROT_INCREMENT;
+        }
+
+        break;
     }
-    else if (!state_sent && (b_ts != NULL) && (a_ts == NULL)) {
-        if (!p_thread_data->ctx.silent) printf("%d - Here 9\n", p_offset);
-        rs = ROT_DECREMENT;
-        state_sent = true;
+    case PIN_DT: {
+        if (!p_thread_data->ctx.silent) printf("%d - Here 1\n", p_offset);
+
+        // Get the period from now to the first active pin detection
+        timespec diff_ts = diff_timespec(p_offset, now_ts, first_active_ts, p_thread_data);
+
+        // Determine whether this event is a bounce or a new active rotation
+        first_active_ts = check_debouncing_timeout(p_offset, first_active_ts, diff_ts, p_thread_data);
+
+        if (first_active_ts == NULL) {
+
+            //
+            // Detected counter-clockwise rotation
+            //
+
+            if (!p_thread_data->ctx.silent) printf("%d - Here 5\n", p_offset);
+            first_active_ts = new timespec();
+            clock_gettime(CLOCK_MONOTONIC, first_active_ts);
+
+            rs = ROT_DECREMENT;
+        }
+
+        break;
+    }
+    case PIN_SW: {
+        if (!p_thread_data->ctx.silent) printf("%d - Here 1\n", p_offset);
+
+        // Get the period from now to the first active pin detection
+        timespec diff_ts = diff_timespec(p_offset, now_ts, first_active_ts, p_thread_data);
+
+        // Determine whether this event is a bounce or a new active rotation
+        first_active_ts = check_debouncing_timeout(p_offset, first_active_ts, diff_ts, p_thread_data);
+
+        if (first_active_ts == NULL) {
+
+            //
+            // Detected momentary switch activation
+            //
+
+            if (!p_thread_data->ctx.silent) printf("%d - Here 5\n", p_offset);
+            first_active_ts = new timespec();
+            clock_gettime(CLOCK_MONOTONIC, first_active_ts);
+ 
+            rs = ROT_SW_PUSHED;
+        }
+
+        break;
+    }
+    default: {
+        printf("RotaryEncoderEvent.handle_event(): Unexpected offset: %d\n", p_offset);
+    }
+    }
+
+    //
+    // Test for valid rotation vs. debouncing
+    //
+
+    if (rs == ROT_NC) {
+        //
+        // Debouncing
+        //
+
+        if (!p_thread_data->ctx.silent) printf("Here 6 - Debouncing\n");
     } else {
-        if (!p_thread_data->ctx.silent) printf("Here 10 - still debouncing\n");
-    }
+        //
+        // Notify the controller
+        //
 
-    //
-    // Notify the controller
-    //
-
-    if (rs != ROT_NC) {
         printf("RotaryEncoderEvent::handle_event: pushed %d\n", rs);
         s_tune_queue->push(rs);
+        rs = ROT_NC;
     }
 }
 
+timespec RotaryEncoderEvent::diff_timespec(int& offset,
+                                           timespec& now_ts,
+                                           timespec* first_ts,
+                                           thread_data_t* thread_data) {
+
+    struct timespec diff_ts = {.tv_sec = 0, .tv_nsec = 0};
+
+    if (first_ts != NULL) {
+            diff_ts.tv_sec = now_ts.tv_sec - first_ts->tv_sec;
+            diff_ts.tv_nsec = now_ts.tv_nsec - first_ts->tv_nsec;
+    }
+
+    if (diff_ts.tv_nsec < 0) {
+        // Adjust the difference
+        diff_ts.tv_nsec += 1000000000; // nsec/sec
+        diff_ts.tv_sec--;
+    }
+
+    if (!thread_data->ctx.silent)
+        printf("%d - Here 2 - diff_ts = [%8ld.%09ld]\n", offset, diff_ts.tv_sec, diff_ts.tv_nsec);
+
+    return diff_ts;
+}
+
+timespec* RotaryEncoderEvent::check_debouncing_timeout(int& offset,
+                                                       timespec* first_active_ts,
+                                                       timespec& diff_ts,
+                                                       thread_data_t* thread_data) {
+
+    if ( (diff_ts.tv_sec > 0) || (diff_ts.tv_nsec > 250000000) ) {
+        if (!thread_data->ctx.silent) printf("%d - Here 3\n", offset);
+
+        if (first_active_ts != NULL) {
+            if (!thread_data->ctx.silent) printf("%d - Here 4\n", offset);
+            delete first_active_ts;
+            first_active_ts = NULL;
+        }
+    }
+
+    return first_active_ts;
+}
