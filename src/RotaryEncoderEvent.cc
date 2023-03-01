@@ -53,7 +53,7 @@ bool RotaryEncoderEvent::init() {
     m_thread_data.num_lines = 3;
     m_thread_data.active_low = true;
     strcpy(m_thread_data.consumer, "JeffsRadio");
-    m_thread_data.timeout = { 2, 0 };
+    m_thread_data.timeout = { 5, 0 };
     //m_thread_data.poll_callback = poll_callback;
     //m_thread_data.event_callback = event_callback;
     m_thread_data.flags = GPIOD_CTXLESS_FLAG_BIAS_PULL_UP;

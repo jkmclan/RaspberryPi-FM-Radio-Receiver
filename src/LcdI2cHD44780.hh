@@ -40,12 +40,9 @@ class LcdI2cHD44780 {
 
 public:
 
-    LcdI2cHD44780() {
-        m_fd = -1;
-    };
+    LcdI2cHD44780();
 
-    ~LcdI2cHD44780() {
-    }
+    ~LcdI2cHD44780();
 
     bool init(void);
 

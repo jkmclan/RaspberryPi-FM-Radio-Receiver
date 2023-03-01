@@ -97,7 +97,7 @@ void RadioControlMain::wait_for_frequency_change() {
             case RotaryEncoderEvent::ROT_INCREMENT:
             case RotaryEncoderEvent::ROT_DECREMENT:
             {
-                printf("RadioControlMain::change_frequency: frequency change detected\n");
+                printf("RadioControlMain::wait_for_frequency_change: frequency change detected\n");
 
                 if ((m_stn_idx == 0) && (rs == RotaryEncoderEvent::ROT_DECREMENT)) {
                     std::cout << "Cannot tune below : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
@@ -116,9 +116,9 @@ void RadioControlMain::wait_for_frequency_change() {
                     //
 
                     // In the LCD display
-//                    m_lcd.lcdLoc(LINE1);
-//                    m_lcd.typeln("RF (MHz): ");
-//                    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
+                    m_lcd.lcdLoc(LINE1);
+                    m_lcd.typeln("RF (MHz): ");
+                    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
 
                     // In the RTL-SDR dongle
                     int freq_Hz = (int) (m_fm_center_freqs_MHz[m_stn_idx] * 1e6);

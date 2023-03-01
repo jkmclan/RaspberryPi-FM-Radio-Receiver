@@ -1,6 +1,14 @@
 
 #include "LcdI2cHD44780.hh"
 
+LcdI2cHD44780::LcdI2cHD44780() {
+    m_fd = -1;
+};
+
+LcdI2cHD44780::~LcdI2cHD44780() {
+    clrLcd();
+}
+
 bool LcdI2cHD44780::init() {
 
   // Initialize the WiringPi library

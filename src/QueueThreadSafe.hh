@@ -42,7 +42,8 @@ public:
         while (m_do_exit == 0) {
 
             // wait until queue is not empty or a timeout occurs
-            bool stat = m_cond.wait_for( lock, 10*100ms, [this]() { return !m_queue.empty(); } );
+            //bool stat = m_cond.wait_for( lock, 10*100ms, [this]() { return !m_queue.empty(); } );
+            bool stat = m_cond.wait_for( lock, 5s, [this]() { return !m_queue.empty(); } );
 
             if (stat == false) {
 
