@@ -53,7 +53,8 @@ bool RadioControlMain::init() {
 
     // Initialize the list of FM radio center frequencies
 
-    double freq_MHz = 87.5;
+    //double freq_MHz = 87.5;
+    double freq_MHz = 90.1;
     m_stn_idx = 0;
     for (int ii=0; ii<NUM_FM_FREQS; ++ii) {
 
@@ -63,7 +64,9 @@ bool RadioControlMain::init() {
 
     // Initialize the RTL-SDR tuned frequency
 
-    controller.freqs[controller.freq_len++] = m_fm_center_freqs_MHz[m_stn_idx] * 1e6;
+    controller.freqs[controller.freq_len] = m_fm_center_freqs_MHz[m_stn_idx] * 1e6;
+    optimal_settings(controller.freqs[controller.freq_len], demod.rate_in);
+    controller.freq_len++;
 
     //
     // Initialize and start a thread to monitor the radio frequency dial
@@ -100,16 +103,16 @@ void RadioControlMain::wait_for_frequency_change() {
                 printf("RadioControlMain::wait_for_frequency_change: frequency change detected\n");
 
                 if ((m_stn_idx == 0) && (rs == RotaryEncoderEvent::ROT_DECREMENT)) {
-                    std::cout << "Cannot tune below : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
+                    std::cerr << "Cannot tune dial below : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
                 }
                 else if ((m_stn_idx == NUM_FM_FREQS-1) && (rs == RotaryEncoderEvent::ROT_INCREMENT)) {
-                    std::cout << "Cannot tune above : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
+                    std::cerr << "Cannot tune dial above : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
                 } else {
                     m_stn_idx += rs ;
                     char center_freq_MHz_s[10];
                     sprintf(center_freq_MHz_s, "%5.1f", m_fm_center_freqs_MHz[m_stn_idx]);
 
-                    std::cout << "FM Center Freq (MHz) : " <<  m_fm_center_freqs_MHz[m_stn_idx] << " / " << center_freq_MHz_s << std::endl;
+                    std::cerr << "FM Dial Center Freq (MHz) : " <<  m_fm_center_freqs_MHz[m_stn_idx] << " / " << center_freq_MHz_s << std::endl;
 
                     //
                     // Update the frequency
@@ -188,7 +191,6 @@ void usage(void)
                 "\t    omitting the filename also uses stdout\n\n"
                 "Experimental options:\n"
                 "\t[-r resample_rate (default: none / same as -s)]\n"
-                "\t[-t squelch_delay (default: 10)]\n"
                 "\t    +values will mute/scan, -values will exit\n"
                 "\t[-F fir_size (default: off)]\n"
                 "\t    enables low-leakage downsample filter\n"
@@ -217,13 +219,6 @@ int main(int argc, char **argv)
     demod_init(&demod);
     output_init(&output);
     controller_init(&controller);
-
-    // NEW -- Create and initialize the Radio Controller
-
-    RadioControlMain rcm;
-    rcm.init();
-
-    // END NEW -- Create and initialize the Radio Controller
 
     int r, opt;
     int dev_given = 0;
@@ -267,13 +262,6 @@ int main(int argc, char **argv)
             demod.post_downsample = (int)atof(optarg);
             if (demod.post_downsample < 1 || demod.post_downsample >> MAXIMUM_OVERSAMPLE) {
                 fprintf(stderr, "Oversample must be between 1 and %i\n", MAXIMUM_OVERSAMPLE);
-            }
-            break;
-        case 't':
-            demod.conseq_squelch = (int)atof(optarg);
-            if (demod.conseq_squelch < 0) {
-                demod.conseq_squelch = -demod.conseq_squelch;
-                demod.terminate_on_squelch = 1;
             }
             break;
         case 'p':
@@ -338,7 +326,6 @@ int main(int argc, char **argv)
                 demod.custom_atan = 1;
                 //demod.post_downsample = 4;
                 demod.deemph = 1;
-                demod.squelch_level = 0;
             }
             break;
         case 'T':
@@ -356,12 +343,6 @@ int main(int argc, char **argv)
 
     if (!output.rate) {
         output.rate = demod.rate_out;
-    }
-
-    sanity_checks();
-
-    if (controller.freq_len > 1) {
-        demod.terminate_on_squelch = 0;
     }
 
     if (argc <= optind) {
@@ -407,6 +388,15 @@ int main(int argc, char **argv)
     if (enable_biastee) {
         fprintf(stderr, "activated bias-T on GPIO PIN 0\n");
     }
+
+    // NEW -- Create and initialize the Radio Controller
+
+    RadioControlMain rcm;
+    rcm.init();
+
+    // END NEW -- Create and initialize the Radio Controller
+
+    sanity_checks();
 
     verbose_ppm_set(dongle.dev, dongle.ppm_error);
 

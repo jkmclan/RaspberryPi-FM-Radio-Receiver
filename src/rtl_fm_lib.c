@@ -49,12 +49,16 @@
  */
 
 
-#include "rtl_fm_lib.h"
-
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <sys/types.h>
+#include <limits.h>
+#include <alsa/asoundlib.h>
 
+#include <kissfft/kiss_fft.h>
+#include <kissfft/kiss_fftr.h>
+
+#include "rtl_fm_lib.h"
 
 /*
    Public Data
@@ -104,21 +108,55 @@ static void rotate_90(unsigned char *buf, uint32_t len)
 /* 90 rotation is 1+0j, 0+1j, -1+0j, 0-1j
    or [0, 1, -3, 2, -4, -5, 7, -6] */
 {
-	uint32_t i;
-	unsigned char tmp;
-	for (i=0; i<len; i+=8) {
-		/* uint8_t negation = 255 - x */
-		tmp = 255 - buf[i+3];
-		buf[i+3] = buf[i+2];
-		buf[i+2] = tmp;
+    ////////// 27Mar2023 First Comment Update ///////////////////////
+    // https://dsp.stackexchange.com/questions/54950/90-degree-phase-shift-rotation-algorithm-for-sdr
+    // 
+    // I believe this algorithm isn’t a rotation (phase shift)
+    // by 90degrees but instead is a frequency shift of fsamp/4. 
+    // In this algorithm each sample is rotated 90 degrees with 
+    // respect to the last one causing a frequency shift:
+    //    
+    //    Samp1: no rotation
+    //    Samp2: 90 degree rotation
+    //    Samp3: 180 degree rotation
+    //    Samp4: 270 degree rotation
+    //    Samp5: 360 -> 0 degree rotation
+    //    Samp6: 90 degree rotation
+    ////////////////////////////////////////////////////////
 
-		buf[i+4] = 255 - buf[i+4];
-		buf[i+5] = 255 - buf[i+5];
+    ////////// 27Mar2023 2nd Comment Update ///////////////////////
+    // https://dsp.stackexchange.com/questions/51889/what-exactly-is-a-90-degree-phase-shift-of-a-digital-signal-in-fm-demodulation-a/51898#51898
+    //
+    // I want to mention the possibility that this may 
+    // actually be a delay element and not a phase shift in 
+    // the sense that phase shift implies a shift of that 
+    // phase at all frequencies, while a true delay has a 
+    // phase shift that is proportional to frequency. It is 
+    // this property that is exploited to form simple FM demodulator structures
+    //
+    // For a pure 90 degree phase shift all you need to do is:
+    //
+    //    Ir = -Qi, 
+    //    Qr = Ii 
+    //
+    // at every sample.
+    ////////////////////////////////////////////////////////
 
-		tmp = 255 - buf[i+6];
-		buf[i+6] = buf[i+7];
-		buf[i+7] = tmp;
-	}
+    uint32_t i;
+    unsigned char tmp;
+    for (i=0; i<len; i+=8) {
+        /* uint8_t negation = 255 - x */
+        tmp = 255 - buf[i+3];
+        buf[i+3] = buf[i+2];
+        buf[i+2] = tmp;
+
+        buf[i+4] = 255 - buf[i+4];
+        buf[i+5] = 255 - buf[i+5];
+
+        tmp = 255 - buf[i+6];
+        buf[i+6] = buf[i+7];
+        buf[i+7] = tmp;
+    }
 }
 
 static void low_pass(struct demod_state *d)
@@ -464,24 +502,161 @@ static int mad(int16_t *samples, int len, int step)
 	return sum / (len / step);
 }
 
-static int rms(int16_t *samples, int len, int step)
-/* largely lifted from rtl_power */
+// squelch() was written by Jeff
+static void squelch(int16_t *samples, int len, int level)
 {
+        fprintf(stderr, "squelch - Entry - len: %d\n", len);
+
+        static long count = 0;
+
+        int nfft = 4096;
+        int nfreqs=nfft/2+1;
+
+        kiss_fftr_cfg   cfg = kiss_fftr_alloc(nfft,0,0,0);
+        kiss_fft_scalar *tbuf = (kiss_fft_scalar*) malloc(sizeof(kiss_fft_scalar)*nfft);
+        kiss_fft_cpx    *fbuf = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx)*nfreqs);
+
+        int i;
+        for (i=0;i<len;++i)  {
+            tbuf[i] = samples[i];
+        }
+
+        // Add zero-pad samples 
+        for (i=len;i<nfft;++i) {
+            tbuf[i] = 0;
+        }
+
+        // Remove DC bias
+        float avg = 0;
+        for (i=0;i<nfft;++i)  avg += tbuf[i];
+        avg /= nfft;
+        for (i=0;i<nfft;++i)  tbuf[i] -= (kiss_fft_scalar)avg;
+
+        // Compute FFT
+        kiss_fftr(cfg, tbuf, fbuf);
+
+        // Calc squared magnitude (i.e power)  of complex bin value
+        float *mag2buf = (float*) malloc(nfreqs * sizeof(float));
+        for (i=0;i<nfreqs;++i) {
+            mag2buf[i] += (fbuf[i].r * fbuf[i].r) + (fbuf[i].i * fbuf[i].i);
+        }
+
+        fprintf(stderr, "mag2buf[0] = %f\n", mag2buf[0]);
+
+        static int squelch = 0;
+        static int unsquelch_cnt = 0;
+        if (!squelch) {
+            if (mag2buf[0] > level) {
+            //if ((mag2buf[0] > 10.0) && (avg_mag2_scaled < 40.0)) {
+                squelch = 1;
+                unsquelch_cnt = 0;
+                printf("MUTE\n");
+            }
+        } else {
+            if (mag2buf[0] < level) {
+            //if ((mag2buf[0] < 10.0) && (avg_mag2_scaled > 40.0)) {
+                unsquelch_cnt++;
+            } else {
+                unsquelch_cnt = 0;
+            }
+            if (unsquelch_cnt == 2) {
+                squelch = 0;
+                printf("UN-MUTE\n");
+            }
+        }
+
+        free (cfg);
+        free (tbuf);
+        free (fbuf);
+        free (mag2buf);
+
+        count = (count % INT_MAX) + 1;
+
+	return;
+}
+
+// pwr_mean_square_real() was written by Jeff
+static uint32_t pwr_mean_square_real(int16_t *samples, int len)
+{
+        fprintf(stderr, "pwr_mean_square_real - Entry - len: %d\n", len);
+
+        static long count = 0;
+
 	int i;
-	long p, t, s;
+        uint32_t pms;
+	double p, t, s;
 	double dc, err;
 
-	p = t = 0L;
-	for (i=0; i<len; i+=step) {
-		s = (long)samples[i];
-		t += s;
+	p = t = 0.0;
+	for (i=0; i<len; ++i) {
+		s = (double)samples[i];
+                t += s;
 		p += s * s;
-	}
-	/* correct for dc offset in squares */
-	dc = (double)(t*step) / (double)len;
-	err = t * 2 * dc - dc * dc * len;
 
-	return (int)sqrt((p-err) / len);
+                if ((count % 10) == 0) {
+                    fprintf(stderr, "sample[%d]: %d\n", i, samples[i]);
+                }
+	}
+
+	/* Calc DC bias by average amplitude */
+	dc = t / len;
+
+        // This removal of DC bias by subtracting DC**2 is untested
+        pms = (uint32_t) (p - (dc * dc)) / len;
+
+        if (1) {
+            fprintf(stderr, "PMS: %d, DC Offset: %f\n", pms, dc);
+        }
+        count = (count % INT_MAX) + 1;
+
+	return pms;
+}
+
+// pwr_mean_square_complex() was written by Jeff
+static uint32_t pwr_mean_square_complex(int16_t *samples, int len)
+{
+        fprintf(stderr, "pwr_mean_square_complex - Entry - len: %d\n", len);
+
+        static long count = 0;
+
+	int32_t i, ti;
+	int32_t q, tq;
+        uint32_t pms;
+	double p, m_sq;
+	double dc, err;
+
+        ti = tq = 0;
+	p = 0.0;
+	int k;
+	for (k=0; k<len-1; k=k+2) {
+	    i = (int32_t)samples[k];
+	    q = (int32_t)samples[k+1];
+
+            m_sq = (double)(i*i) + (double)(q*q);
+
+            ti += i; 
+            tq += q; 
+
+	    p += m_sq;
+
+            if ((count % 10) == 0) {
+                fprintf(stderr, "sample[%d]: i = %d\tq = %d\n", k, samples[k], samples[k+1]);
+            }
+	}
+
+	/* Calc DC bias by average amplitude */
+	int32_t dci = ti / len;
+	int32_t dcq = tq / len;
+
+        // This removal of DC bias by subtracting DC-I**2 plus DC-Q**2 is untested
+        pms = (uint32_t)(p - ((dci*dci) + (dcq*dcq))) / len;
+
+        if (1) {
+            fprintf(stderr, "PMS: %d, DC Ibias: %d Qbias: %d\n", pms, dci, dcq);
+        }
+        count = (count % INT_MAX) + 1;
+
+	return pms;
 }
 
 static void arbitrary_upsample(int16_t *buf1, int16_t *buf2, int len1, int len2)
@@ -552,7 +727,7 @@ static void arbitrary_resample(int16_t *buf1, int16_t *buf2, int len1, int len2)
 static void full_demod(struct demod_state *d)
 {
 	int i, ds_p;
-	int sr = 0;
+	uint32_t sr = 0;
 	ds_p = d->downsample_passes;
 	if (ds_p) {
 		for (i=0; i < ds_p; i++) {
@@ -570,17 +745,6 @@ static void full_demod(struct demod_state *d)
 	} else {
 		low_pass(d);
 	}
-	/* power squelch */
-	if (d->squelch_level) {
-		sr = rms(d->lowpassed, d->lp_len, 1);
-		if (sr < d->squelch_level) {
-			d->squelch_hits++;
-			for (i=0; i<d->lp_len; i++) {
-				d->lowpassed[i] = 0;
-			}
-		} else {
-			d->squelch_hits = 0;}
-	}
 	d->mode_demod(d);  /* lowpassed -> result */
 	if (d->mode_demod == &raw_demod) {
 		return;
@@ -597,6 +761,74 @@ static void full_demod(struct demod_state *d)
 		low_pass_real(d);
 		//arbitrary_resample(d->result, d->result, d->result_len, d->result_len * d->rate_out2 / d->rate_out);
 	}
+	if (d->squelch_level > 0) {
+            //squelch(d->result, d->result_len, d->squelch_level);
+	}
+}
+
+static int get_bool_simple(char **ptr, char *str, int invert, int orig)
+{
+	if (**ptr == ':')
+		(*ptr)++;
+	if (!strncasecmp(*ptr, str, strlen(str))) {
+		orig = 1 ^ (invert ? 1 : 0);
+		while (**ptr != '\0' && **ptr != ',' && **ptr != ':')
+			(*ptr)++;
+	}
+	if (**ptr == ',' || **ptr == ':')
+		(*ptr)++;
+	return orig;
+}
+
+static void set_mixer(char* control) {
+
+    // more /proc/asound/cards
+    //     0 [audioinjectorpi]: audioinjector-p - audioinjector-pi-soundcard
+    //                          audioinjector-pi-soundcard
+    //
+    // more /proc/asound/devices 
+    //         0: [ 0]   : control
+    //        16: [ 0- 0]: digital audio playback
+    //        24: [ 0- 0]: digital audio capture
+    //        33:        : timer
+    //
+    // more /proc/asound/modules 
+    //        0 (efault)
+    //
+    // more /proc/asound/card0/id
+    //        audioinjectorpi
+    //
+    // more /proc/asound/card0/pcm0p/info 
+    //        card: 0
+    //        device: 0
+    //        subdevice: 0
+    //        stream: PLAYBACK
+    //        id: AudioInjector audio wm8731-hifi-0
+    //        name: AudioInjector audio wm8731-hifi-0
+    //        subname: subdevice #0
+    //        class: 0
+    //        subclass: 0
+    //        subdevices_count: 1
+    //        subdevices_avail: 1
+
+    snd_mixer_elem_t*              elem; // initialize to ???
+    snd_mixer_selem_channel_id_t   chn;  // 0 to SND_MIXER_SCHN_LAST
+    int                            ival;
+
+    if (!strncmp(control, "mute", 4) &&   snd_mixer_selem_has_playback_switch(elem)) {
+        snd_mixer_selem_get_playback_switch(elem, chn, &ival);
+        if (snd_mixer_selem_set_playback_switch(elem, chn, get_bool_simple(&control, control, 1, ival)) >= 0)
+            fprintf(stderr, "set_mixer(): mute ON\n");
+        else
+            fprintf(stderr, "set_mixer(): mute not set\n");
+
+    } else if (!strncmp(control, "unmute", 6) && snd_mixer_selem_has_playback_switch(elem)) {
+        snd_mixer_selem_get_playback_switch(elem, chn, &ival);
+        if (snd_mixer_selem_set_playback_switch(elem, chn, get_bool_simple(&control, control, 0, ival)) >= 0)
+            fprintf(stderr, "set_mixer(): mute OFF\n");
+        else
+            fprintf(stderr, "set_mixer(): un-mute not set\n");
+    }
 }
 
 static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
@@ -627,7 +859,7 @@ static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 
 void *dongle_thread_fn(void *arg)
 {
-        printf("dongle TID: %lu\n", gettid());
+        fprintf(stderr, "dongle TID: %lu\n", gettid());
 
 	struct dongle_state *s = (dongle_state*) arg;
 	rtlsdr_read_async(s->dev, rtlsdr_callback, s, 0, s->buf_len);
@@ -636,7 +868,7 @@ void *dongle_thread_fn(void *arg)
 
 void *demod_thread_fn(void *arg)
 {
-        printf("demod TID: %lu\n", gettid());
+        fprintf(stderr, "demod TID: %lu\n", gettid());
 
 	struct demod_state *d = (demod_state*) arg;
 	struct output_state *o = d->output_target;
@@ -648,11 +880,9 @@ void *demod_thread_fn(void *arg)
 		if (d->exit_flag) {
 			do_exit = 1;
 		}
-		if (d->squelch_level && d->squelch_hits > d->conseq_squelch) {
-			d->squelch_hits = d->conseq_squelch + 1;  /* hair trigger */
-			safe_cond_signal(&controller.hop, &controller.hop_m);
-			continue;
-		}
+		//if (this block was squelched) {
+		//	continue;  // don't output
+		//}
 		pthread_rwlock_wrlock(&o->rw);
 		memcpy(o->result, d->result, 2*d->result_len);
 		o->result_len = d->result_len;
@@ -664,7 +894,7 @@ void *demod_thread_fn(void *arg)
 
 void *output_thread_fn(void *arg)
 {
-        printf("output TID: %lu\n", gettid());
+        fprintf(stderr, "output TID: %lu\n", gettid());
 
 	struct output_state *s = (output_state*) arg;
 	while (!do_exit) {
@@ -692,8 +922,11 @@ void optimal_settings(int freq, int rate)
 	}
 	capture_freq = freq;
 	capture_rate = dm->downsample * dm->rate_in;
+
+	//if (cs->wb_mode) {
+	//	capture_freq += 16000;}
 	if (!d->offset_tuning) {
-		capture_freq = freq + capture_rate/4;}
+		capture_freq += capture_rate/4;}
 	capture_freq += cs->edge * dm->rate_in / 2;
 	dm->output_scale = (1<<15) / (128 * dm->downsample);
 	if (dm->output_scale < 1) {
@@ -706,19 +939,15 @@ void optimal_settings(int freq, int rate)
 
 void *controller_thread_fn(void *arg)
 {
-        printf("controller TID: %lu\n", gettid());
+        fprintf(stderr, "controller TID: %lu\n", gettid());
 
 	// thoughts for multiple dongles
 	// might be no good using a controller thread if retune/rate blocks
 	int i;
 	struct controller_state *s = (controller_state*) arg;
 
-	if (s->wb_mode) {
-		for (i=0; i < s->freq_len; i++) {
-			s->freqs[i] += 16000;}
-	}
-
 	/* set up primary channel */
+        fprintf(stderr, "FM Dial Center Freq (MHz) : %f\n", (float)s->freqs[0] * 1e-6);
 	optimal_settings(s->freqs[0], demod.rate_in);
 	if (dongle.direct_sampling) {
 		verbose_direct_sampling(dongle.dev, 1);}
@@ -726,6 +955,7 @@ void *controller_thread_fn(void *arg)
 		verbose_offset_tuning(dongle.dev);}
 
 	/* Set the frequency */
+
 	verbose_set_frequency(dongle.dev, dongle.freq);
 	fprintf(stderr, "Oversampling input by: %ix.\n", demod.downsample);
 	fprintf(stderr, "Oversampling output by: %ix.\n", demod.post_downsample);
@@ -784,9 +1014,6 @@ void demod_init(struct demod_state *s)
 	s->rate_in = DEFAULT_SAMPLE_RATE;
 	s->rate_out = DEFAULT_SAMPLE_RATE;
 	s->squelch_level = 0;
-	s->conseq_squelch = 10;
-	s->terminate_on_squelch = 0;
-	s->squelch_hits = 11;
 	s->downsample_passes = 0;
 	s->comp_fir_size = 0;
 	s->prev_index = 0;

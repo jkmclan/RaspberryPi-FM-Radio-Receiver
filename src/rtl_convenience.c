@@ -147,7 +147,7 @@ int verbose_set_frequency(rtlsdr_dev_t *dev, uint32_t frequency)
 	if (r < 0) {
 		fprintf(stderr, "WARNING: Failed to set center freq.\n");
 	} else {
-		fprintf(stderr, "Tuned to %u Hz.\n", frequency);
+		fprintf(stderr, "Offset Tuned to %u Hz.\n", frequency);
 	}
 	return r;
 }

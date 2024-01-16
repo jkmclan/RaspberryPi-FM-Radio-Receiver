@@ -16,6 +16,8 @@
                -lrtlsdr \
                -lwiringPi \
                -lgpiod \
+               -lasound \
+               -lkissfft-int16_t \
                -lpthread \
                -lm
 

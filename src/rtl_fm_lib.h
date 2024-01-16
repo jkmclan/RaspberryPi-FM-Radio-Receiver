@@ -130,7 +130,7 @@ struct demod_state
 	int      downsample;    /* min 1, max 256 */
 	int      post_downsample;
 	int      output_scale;
-	int      squelch_level, conseq_squelch, squelch_hits, terminate_on_squelch;
+	int      squelch_level;
 	int      downsample_passes;
 	int      comp_fir_size;
 	int      custom_atan;
