@@ -102,7 +102,7 @@ bool RotaryEncoder::init() {
             perror(err_msg);
             return false;
         } else {
-            printf("Opened fd=%d, %s\n", m_PinFds[ii], gpio_val.c_str());
+            fprintf(stderr, "Opened fd=%d, %s\n", m_PinFds[ii], gpio_val.c_str());
         }
 
     } // End For
@@ -133,8 +133,8 @@ RotaryEncoder::RotaryStates_t RotaryEncoder::get_state() {
         return ROT_NC;
     }
 
-    //printf("CLK = %c\n", cur_state_CLK_c);
-    //printf("DT  = %c\n", cur_state_DT_c);
+    //fprintf(stderr, "CLK = %c\n", cur_state_CLK_c);
+    //fprintf(stderr, "DT  = %c\n", cur_state_DT_c);
 
     char cur_state_c[2];
     strncpy(&cur_state_c[0], &cur_state_CLK_c, 1);
@@ -248,7 +248,7 @@ RotaryEncoder::RotaryStates_t RotaryEncoder::eval_rotary_state(char* cur_state_c
     }
     default:
     {
-        printf("Invalid rotary state: %d\n", m_RotaryQuadratureState);
+        fprintf(stderr, "Invalid rotary state: %d\n", m_RotaryQuadratureState);
         m_RotaryQuadratureState = ROT_IDLE;
     }
     }
@@ -278,7 +278,7 @@ RotaryEncoder::RotaryStates_t RotaryEncoder::eval_switch_state(char* cur_state_c
     }
     default:
     {
-        printf("Invalid rotary switch state: %d\n", m_RotarySwitchState);
+        fprintf(stderr, "Invalid rotary switch state: %d\n", m_RotarySwitchState);
         m_RotaryQuadratureState = ROT_IDLE;
     }
     }

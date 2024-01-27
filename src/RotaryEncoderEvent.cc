@@ -143,7 +143,7 @@ void RotaryEncoderEvent::event_print_human_readable(unsigned int offset,
     else
         strcpy(evname, "FALLING EDGE");
 
-    printf("event: %s offset: %u Event Generated Time (MONOTONIC) : [%8ld.%09ld]  : Event Handled Time (MONOTONIC) : [%8ld.%09ld]\n",
+    fprintf(stderr, "event: %s offset: %u Event Generated Time (MONOTONIC) : [%8ld.%09ld]  : Event Handled Time (MONOTONIC) : [%8ld.%09ld]\n",
            evname, offset, ts->tv_sec, ts->tv_nsec,
            now_ts.tv_sec, now_ts.tv_nsec);
 }
@@ -252,7 +252,7 @@ void RotaryEncoderEvent::handle_event(thread_data_t* p_thread_data,
     switch (p_offset) {
 
     case PIN_CLK: {
-        if (!p_thread_data->ctx.silent) printf("%d - Here 1\n", p_offset);
+        if (!p_thread_data->ctx.silent) fprintf(stderr, "%d - Here 1\n", p_offset);
 
         // Get the period from now to the first active pin detection
         timespec diff_ts = diff_timespec(p_offset, now_ts, first_active_ts, p_thread_data);
@@ -266,7 +266,7 @@ void RotaryEncoderEvent::handle_event(thread_data_t* p_thread_data,
             // Detected clockwise rotation
             //
 
-            if (!p_thread_data->ctx.silent) printf("%d - Here 5\n", p_offset);
+            if (!p_thread_data->ctx.silent) fprintf(stderr, "%d - Here 5\n", p_offset);
             first_active_ts = new timespec();
             clock_gettime(CLOCK_MONOTONIC, first_active_ts);
  
@@ -276,7 +276,7 @@ void RotaryEncoderEvent::handle_event(thread_data_t* p_thread_data,
         break;
     }
     case PIN_DT: {
-        if (!p_thread_data->ctx.silent) printf("%d - Here 1\n", p_offset);
+        if (!p_thread_data->ctx.silent) fprintf(stderr, "%d - Here 1\n", p_offset);
 
         // Get the period from now to the first active pin detection
         timespec diff_ts = diff_timespec(p_offset, now_ts, first_active_ts, p_thread_data);
@@ -290,7 +290,7 @@ void RotaryEncoderEvent::handle_event(thread_data_t* p_thread_data,
             // Detected counter-clockwise rotation
             //
 
-            if (!p_thread_data->ctx.silent) printf("%d - Here 5\n", p_offset);
+            if (!p_thread_data->ctx.silent) fprintf(stderr, "%d - Here 5\n", p_offset);
             first_active_ts = new timespec();
             clock_gettime(CLOCK_MONOTONIC, first_active_ts);
 
@@ -300,7 +300,7 @@ void RotaryEncoderEvent::handle_event(thread_data_t* p_thread_data,
         break;
     }
     case PIN_SW: {
-        if (!p_thread_data->ctx.silent) printf("%d - Here 1\n", p_offset);
+        if (!p_thread_data->ctx.silent) fprintf(stderr, "%d - Here 1\n", p_offset);
 
         // Get the period from now to the first active pin detection
         timespec diff_ts = diff_timespec(p_offset, now_ts, first_active_ts, p_thread_data);
@@ -314,7 +314,7 @@ void RotaryEncoderEvent::handle_event(thread_data_t* p_thread_data,
             // Detected momentary switch activation
             //
 
-            if (!p_thread_data->ctx.silent) printf("%d - Here 5\n", p_offset);
+            if (!p_thread_data->ctx.silent) fprintf(stderr, "%d - Here 5\n", p_offset);
             first_active_ts = new timespec();
             clock_gettime(CLOCK_MONOTONIC, first_active_ts);
  
@@ -324,7 +324,7 @@ void RotaryEncoderEvent::handle_event(thread_data_t* p_thread_data,
         break;
     }
     default: {
-        printf("RotaryEncoderEvent.handle_event(): Unexpected offset: %d\n", p_offset);
+        fprintf(stderr, "RotaryEncoderEvent.handle_event(): Unexpected offset: %d\n", p_offset);
     }
     }
 
@@ -337,13 +337,13 @@ void RotaryEncoderEvent::handle_event(thread_data_t* p_thread_data,
         // Debouncing
         //
 
-        if (!p_thread_data->ctx.silent) printf("Here 6 - Debouncing\n");
+        if (!p_thread_data->ctx.silent) fprintf(stderr, "Here 6 - Debouncing\n");
     } else {
         //
         // Notify the controller
         //
 
-        printf("RotaryEncoderEvent::handle_event: pushed %d\n", rs);
+        fprintf(stderr, "RotaryEncoderEvent::handle_event: pushed %d\n", rs);
         s_tune_queue->push(rs);
         rs = ROT_NC;
     }
@@ -368,7 +368,7 @@ timespec RotaryEncoderEvent::diff_timespec(int& offset,
     }
 
     if (!thread_data->ctx.silent)
-        printf("%d - Here 2 - diff_ts = [%8ld.%09ld]\n", offset, diff_ts.tv_sec, diff_ts.tv_nsec);
+        fprintf(stderr, "%d - Here 2 - diff_ts = [%8ld.%09ld]\n", offset, diff_ts.tv_sec, diff_ts.tv_nsec);
 
     return diff_ts;
 }
@@ -379,10 +379,10 @@ timespec* RotaryEncoderEvent::check_debouncing_timeout(int& offset,
                                                        thread_data_t* thread_data) {
 
     if ( (diff_ts.tv_sec > 0) || (diff_ts.tv_nsec > 250000000) ) {
-        if (!thread_data->ctx.silent) printf("%d - Here 3\n", offset);
+        if (!thread_data->ctx.silent) fprintf(stderr, "%d - Here 3\n", offset);
 
         if (first_active_ts != NULL) {
-            if (!thread_data->ctx.silent) printf("%d - Here 4\n", offset);
+            if (!thread_data->ctx.silent) fprintf(stderr, "%d - Here 4\n", offset);
             delete first_active_ts;
             first_active_ts = NULL;
         }

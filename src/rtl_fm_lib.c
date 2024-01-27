@@ -550,7 +550,7 @@ static void squelch(int16_t *samples, int len, int level)
             //if ((mag2buf[0] > 10.0) && (avg_mag2_scaled < 40.0)) {
                 squelch = 1;
                 unsquelch_cnt = 0;
-                printf("MUTE\n");
+                fprintf(stderr, "MUTE\n");
             }
         } else {
             if (mag2buf[0] < level) {
@@ -561,7 +561,7 @@ static void squelch(int16_t *samples, int len, int level)
             }
             if (unsquelch_cnt == 2) {
                 squelch = 0;
-                printf("UN-MUTE\n");
+                fprintf(stderr, "UN-MUTE\n");
             }
         }
 
@@ -752,16 +752,21 @@ static void full_demod(struct demod_state *d)
 	/* todo, fm noise squelch */
 	// use nicer filter here too?
 	if (d->post_downsample > 1) {
+                //fprintf(stderr, "full_demod(): post-demod - call low_pass_simple()\n");
 		d->result_len = low_pass_simple(d->result, d->result_len, d->post_downsample);}
 	if (d->deemph) {
+                //fprintf(stderr, "full_demod(): post-demod - call deemph_filter()\n");
 		deemph_filter(d);}
 	if (d->dc_block) {
+                //fprintf(stderr, "full_demod(): post-demod - call dc_block_filter()\n");
 		dc_block_filter(d);}
 	if (d->rate_out2 > 0) {
+                //fprintf(stderr, "full_demod(): post-demod - call low_pass_real()\n");
 		low_pass_real(d);
 		//arbitrary_resample(d->result, d->result, d->result_len, d->result_len * d->rate_out2 / d->rate_out);
 	}
 	if (d->squelch_level > 0) {
+            //fprintf(stderr, "full_demod(): post-demod - call squelch()\n");
             //squelch(d->result, d->result_len, d->squelch_level);
 	}
 }

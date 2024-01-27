@@ -48,7 +48,7 @@ public:
             if (stat == false) {
 
                 // A timeout occured
-                //printf("QueueThreadSafe.pop : wait timeout\n");
+                //fprintf(stderr, "QueueThreadSafe.pop : wait timeout\n");
 
                 continue;
             }
@@ -60,7 +60,7 @@ public:
             // return item
             return item;
         }
-        printf("QueueThreadSafe.pop : exiting\n");
+        fprintf(stderr, "QueueThreadSafe.pop : exiting\n");
 
         T item;
         return item;

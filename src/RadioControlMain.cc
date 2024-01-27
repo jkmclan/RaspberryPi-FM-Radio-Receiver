@@ -30,7 +30,7 @@ RadioControlMain::~RadioControlMain() {
 
     int* thread_stat;
     pthread_join(m_rotary_encoder_thread, (void**) &thread_stat);
-    printf("RadioControlMain::~RadioControlMain : joined with m_rotary_encoder_thread\n");
+    fprintf(stderr, "RadioControlMain::~RadioControlMain : joined with m_rotary_encoder_thread\n");
 
     if (m_rotary_encoder != NULL) delete m_rotary_encoder;
     if (m_tune_queue != NULL) delete m_tune_queue;
@@ -82,25 +82,25 @@ bool RadioControlMain::init() {
     // Initialize the radio frequency display
     //
 
-    m_lcd.init();
-    m_lcd.clrLcd();
-    m_lcd.typeln("RF (MHz): ");
-    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
+//    m_lcd.init();
+//    m_lcd.clrLcd();
+//    m_lcd.typeln("RF (MHz): ");
+//    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
 
     return true;
 }
 
 void RadioControlMain::wait_for_frequency_change() {
 
-        printf("RadioControlMain::wait_for_frequency_change : waiting to pop\n");
+        fprintf(stderr, "RadioControlMain::wait_for_frequency_change : waiting to pop\n");
         RotaryEncoderEvent::RotaryStates rs = m_tune_queue->pop();
-        printf("RadioControlMain::wait_for_frequency_change : popped %d\n", rs);
+        fprintf(stderr, "RadioControlMain::wait_for_frequency_change : popped %d\n", rs);
 
         switch(rs) {
             case RotaryEncoderEvent::ROT_INCREMENT:
             case RotaryEncoderEvent::ROT_DECREMENT:
             {
-                printf("RadioControlMain::wait_for_frequency_change: frequency change detected\n");
+                fprintf(stderr, "RadioControlMain::wait_for_frequency_change: frequency change detected\n");
 
                 if ((m_stn_idx == 0) && (rs == RotaryEncoderEvent::ROT_DECREMENT)) {
                     std::cerr << "Cannot tune dial below : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
@@ -418,7 +418,7 @@ int main(int argc, char **argv)
     /* Reset endpoint before we start reading from it (mandatory) */
     verbose_reset_buffer(dongle.dev);
 
-    printf("main: TID: %lu\n", gettid());
+    fprintf(stderr, "main: TID: %lu\n", gettid());
     pthread_create(&controller.thread, NULL, controller_thread_fn, (void *)(&controller));
     usleep(100000);
     pthread_create(&output.thread, NULL, output_thread_fn, (void *)(&output));
