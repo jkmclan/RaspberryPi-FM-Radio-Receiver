@@ -1,0 +1,4 @@
+ 2104  g++ -c -o rtl_fm.o rtl_fm.c
+ 2117  g++ -c -o convenience.o convenience.c
+ 2130  g++ -o rtl_fm rtl_fm.o convenience.o -lrtlsdr -lpthread -lkissfft-int16_t
+

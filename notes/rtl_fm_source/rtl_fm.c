@@ -75,6 +75,9 @@
 #include "rtl-sdr.h"
 #include "convenience.h"
 
+#include <kissfft/kiss_fft.h>
+#include <kissfft/kiss_fftr.h>
+
 #define DEFAULT_SAMPLE_RATE		24000
 #define DEFAULT_BUF_LENGTH		(1 * 16384)
 #define MAXIMUM_OVERSAMPLE		16
@@ -643,6 +646,103 @@ int mad(int16_t *samples, int len, int step)
 	return sum / (len / step);
 }
 
+#define min(X, Y)  ((X) < (Y) ? (X) : (Y))
+
+// squelch() was written by Jeff
+void squelch(int16_t *samples, int len, int level)
+{
+        fprintf(stderr, "squelch - Entry - len: %d, sizeof(kiss_fft_scalar) = %d\n", len, sizeof(kiss_fft_scalar));
+
+        static long count = 0;
+
+        int nfft = 4096;
+        //int nfft = 8;
+        int nfreqs=nfft/2+1;
+
+        static kiss_fftr_cfg     cfg = NULL; if (cfg == NULL)   cfg = kiss_fftr_alloc(nfft,0,0,0);
+        static kiss_fft_scalar* tbuf = NULL; if (tbuf == NULL) tbuf = (kiss_fft_scalar*) malloc(sizeof(kiss_fft_scalar) * nfft);
+        static kiss_fft_cpx*    fbuf = NULL; if (fbuf == NULL) fbuf = (kiss_fft_cpx*) malloc(sizeof(kiss_fft_cpx) * nfreqs);
+
+        double avg = 0;
+        int i;
+        for (i=0;i<min(len, nfft);++i)  {
+            tbuf[i] = (kiss_fft_scalar) samples[i];
+
+            avg += tbuf[i];
+
+            if ((count % 1) == 0) {
+                //fprintf(stderr, "samples[%d] = %d\n", i, samples[i]);
+            }
+        }
+
+        // Calc average for DC bias 
+        avg = avg / min(len, nfft);
+        if ((count % 1) == 0) {
+            fprintf(stderr, "dc avg = %f\n", avg);
+        }
+
+        // Remove DC bias
+        for (i=0;i<min(len, nfft);++i) {
+
+            tbuf[i] -= (kiss_fft_scalar) avg;
+
+            if ((count % 1) == 0) {
+                //fprintf(stderr, "tbuf[%d] = %f\n", i, tbuf[i]);
+            }
+        }
+
+        // Add zero-pad samples
+        for (i=min(len, nfft);i<nfft;++i) {
+            tbuf[i] = 0;
+            //tbuf[i].i = 0;
+        }
+
+        // Compute FFT
+        kiss_fftr(cfg, tbuf, fbuf);
+
+        // Calc squared magnitude (i.e power)  of complex bin value
+        static double* mag2buf = NULL; if (mag2buf == NULL) mag2buf = (double*) malloc(sizeof(double) * nfreqs);
+        mag2buf[0] = 0.0;
+        for (i=0;i<nfreqs;++i) {
+            mag2buf[i] += (fbuf[i].r * fbuf[i].r) + (fbuf[i].i * fbuf[i].i);
+
+            if ((count % 1) == 0) {
+                //fprintf(stderr, "mag2buf[%d]\t = %f\tI: %f\tQ: %f\n", i, mag2buf[i], fbuf[i].r, fbuf[i].i);
+            }
+        }
+
+        static int squelch = 0;
+        static int unsquelch_cnt = 0;
+        if (!squelch) {
+            if (mag2buf[0] > level) {
+            //if ((mag2buf[0] > 10.0) && (avg_mag2_scaled < 40.0)) {
+                squelch = 1;
+                unsquelch_cnt = 0;
+                fprintf(stderr, "MUTE\n");
+            }
+        } else {
+            if (mag2buf[0] < level) {
+            //if ((mag2buf[0] < 10.0) && (avg_mag2_scaled > 40.0)) {
+                unsquelch_cnt++;
+            } else {
+                unsquelch_cnt = 0;
+            }
+            if (unsquelch_cnt == 2) {
+                squelch = 0;
+                fprintf(stderr, "UN-MUTE\n");
+            }
+        }
+
+        //free (cfg);
+        //free (tbuf);
+        //free (fbuf);
+        //free (mag2buf);
+
+        count = (count % INT_MAX) + 1;
+
+        return;
+}
+
 int rms(int16_t *samples, int len, int step)
 /* largely lifted from rtl_power */
 {
@@ -749,17 +849,7 @@ void full_demod(struct demod_state *d)
 	} else {
 		low_pass(d);
 	}
-	/* power squelch */
-	if (d->squelch_level) {
-		sr = rms(d->lowpassed, d->lp_len, 1);
-		if (sr < d->squelch_level) {
-			d->squelch_hits++;
-			for (i=0; i<d->lp_len; i++) {
-				d->lowpassed[i] = 0;
-			}
-		} else {
-			d->squelch_hits = 0;}
-	}
+
 	d->mode_demod(d);  /* lowpassed -> result */
 	if (d->mode_demod == &raw_demod) {
 		return;
@@ -767,14 +857,22 @@ void full_demod(struct demod_state *d)
 	/* todo, fm noise squelch */
 	// use nicer filter here too?
 	if (d->post_downsample > 1) {
+                //fprintf(stderr, "full_demod(): post-demod - call low_pass_simple()\n");
 		d->result_len = low_pass_simple(d->result, d->result_len, d->post_downsample);}
 	if (d->deemph) {
+                //fprintf(stderr, "full_demod(): post-demod - call deemph_filter()\n");
 		deemph_filter(d);}
 	if (d->dc_block) {
+                //fprintf(stderr, "full_demod(): post-demod - call dc_block_filter()\n");
 		dc_block_filter(d);}
 	if (d->rate_out2 > 0) {
+                //fprintf(stderr, "full_demod(): post-demod - call low_pass_real()\n");
 		low_pass_real(d);
 		//arbitrary_resample(d->result, d->result, d->result_len, d->result_len * d->rate_out2 / d->rate_out);
+	}
+	if (d->squelch_level) {
+            //fprintf(stderr, "full_demod(): post-demod - call squelch()\n");
+            squelch(d->result, d->result_len, d->squelch_level);
 	}
 }
 
@@ -782,6 +880,7 @@ static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 {
 	int i;
 	struct dongle_state *s = (dongle_state*) ctx;
+	//struct dongle_state *s = ctx;
 	struct demod_state *d = s->demod_target;
 
 	if (do_exit) {
@@ -822,11 +921,6 @@ static void *demod_thread_fn(void *arg)
 		pthread_rwlock_unlock(&d->rw);
 		if (d->exit_flag) {
 			do_exit = 1;
-		}
-		if (d->squelch_level && d->squelch_hits > d->conseq_squelch) {
-			d->squelch_hits = d->conseq_squelch + 1;  /* hair trigger */
-			safe_cond_signal(&controller.hop, &controller.hop_m);
-			continue;
 		}
 		pthread_rwlock_wrlock(&o->rw);
 		memcpy(o->result, d->result, 2*d->result_len);
@@ -1142,6 +1236,7 @@ int main(int argc, char **argv)
 				demod.custom_atan = 1;
 				//demod.post_downsample = 4;
 				demod.deemph = 1;
+                                demod.dc_block = 1;
 				demod.squelch_level = 0;}
 			break;
 		case 'T':
