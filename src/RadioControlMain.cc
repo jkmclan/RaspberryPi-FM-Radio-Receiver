@@ -53,8 +53,8 @@ bool RadioControlMain::init() {
 
     // Initialize the list of FM radio center frequencies
 
-    //double freq_MHz = 87.5;
-    double freq_MHz = 90.1;
+    double freq_MHz = 87.5;
+    //double freq_MHz = 90.1;
     m_stn_idx = 0;
     for (int ii=0; ii<NUM_FM_FREQS; ++ii) {
 
@@ -82,64 +82,61 @@ bool RadioControlMain::init() {
     // Initialize the radio frequency display
     //
 
-//    m_lcd.init();
-//    m_lcd.clrLcd();
-//    m_lcd.typeln("RF (MHz): ");
-//    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
+    m_lcd.init();
+    m_lcd.clrLcd();
+    m_lcd.typeln("RF (MHz): ");
+    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
 
     return true;
 }
 
 void RadioControlMain::wait_for_frequency_change() {
 
-        fprintf(stderr, "RadioControlMain::wait_for_frequency_change : waiting to pop\n");
-        RotaryEncoderEvent::RotaryStates rs = m_tune_queue->pop();
-        fprintf(stderr, "RadioControlMain::wait_for_frequency_change : popped %d\n", rs);
+    fprintf(stderr, "RadioControlMain::wait_for_frequency_change : waiting to pop\n");
+    RotaryEncoderEvent::RotaryStates rs = m_tune_queue->pop();
+    fprintf(stderr, "RadioControlMain::wait_for_frequency_change : popped %d\n", rs);
 
-        switch(rs) {
-            case RotaryEncoderEvent::ROT_INCREMENT:
-            case RotaryEncoderEvent::ROT_DECREMENT:
-            {
-                fprintf(stderr, "RadioControlMain::wait_for_frequency_change: frequency change detected\n");
-
-                if ((m_stn_idx == 0) && (rs == RotaryEncoderEvent::ROT_DECREMENT)) {
-                    std::cerr << "Cannot tune dial below : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
-                }
-                else if ((m_stn_idx == NUM_FM_FREQS-1) && (rs == RotaryEncoderEvent::ROT_INCREMENT)) {
-                    std::cerr << "Cannot tune dial above : " << m_fm_center_freqs_MHz[m_stn_idx] << " MHz"<< std::endl;
-                } else {
-                    m_stn_idx += rs ;
-                    char center_freq_MHz_s[10];
-                    sprintf(center_freq_MHz_s, "%5.1f", m_fm_center_freqs_MHz[m_stn_idx]);
-
-                    std::cerr << "FM Dial Center Freq (MHz) : " <<  m_fm_center_freqs_MHz[m_stn_idx] << " / " << center_freq_MHz_s << std::endl;
-
-                    //
-                    // Update the frequency
-                    //
-
-                    // In the LCD display
-                    m_lcd.lcdLoc(LINE1);
-                    m_lcd.typeln("RF (MHz): ");
-                    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
-
-                    // In the RTL-SDR dongle
-                    int freq_Hz = (int) (m_fm_center_freqs_MHz[m_stn_idx] * 1e6);
-                    optimal_settings(freq_Hz, demod.rate_in);
-                    verbose_set_frequency(dongle.dev, dongle.freq);
-                }
-                break;
-            }
-            case RotaryEncoderEvent::ROT_SW_PUSHED:
-            {
-                std::cout << "SW : PUSHED" << std::endl;
-                break;
-            }
-            default:
-            {
-                break;
-            }
+    switch(rs) {
+        case RotaryEncoderEvent::ROT_INCREMENT:
+        case RotaryEncoderEvent::ROT_SW_PUSHED:
+        {
+            m_stn_idx = (m_stn_idx + rs) % NUM_FM_FREQS ;
+            break;
         }
+        case RotaryEncoderEvent::ROT_DECREMENT:
+        {
+            (m_stn_idx == 0) ? m_stn_idx = (NUM_FM_FREQS + rs) : m_stn_idx += rs;
+            break;
+        }
+        default:
+        {
+            std::cerr << "Unexpected RotaryEncoderEvent::RotaryStates: " << rs << std::endl;
+            break;
+        }
+    }
+
+    std::cerr << "RadioControlMain::wait_for_frequency_change: frequency change detected : " << rs << std::endl;
+
+    char center_freq_MHz_s[10];
+    sprintf(center_freq_MHz_s, "%5.1f", m_fm_center_freqs_MHz[m_stn_idx]);
+
+    std::cerr << "FM Dial Center Freq (MHz) : " <<  m_fm_center_freqs_MHz[m_stn_idx] << " / " << center_freq_MHz_s << std::endl;
+
+    //
+    // Update the frequency
+    //
+
+    // In the LCD display
+    m_lcd.lcdLoc(LINE1);
+    m_lcd.typeln("RF (MHz): ");
+    m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
+
+    // In the RTL-SDR dongle
+    int freq_Hz = (int) (m_fm_center_freqs_MHz[m_stn_idx] * 1e6);
+    optimal_settings(freq_Hz, demod.rate_in);
+    verbose_set_frequency(dongle.dev, dongle.freq);
+
+    return;
 }
 
 #ifdef _WIN32

@@ -23,11 +23,11 @@
 
 ./build/%.o: ./src/%.cc ./src/%.hh
 	@mkdir -p ./build
-	g++ -c -g $< -o $@
+	g++ -c $< -o $@
 
 ./build/%.o: ./src/%.c ./src/%.h
 	@mkdir -p ./build
-	g++ -c -g $< -o $@
+	g++ -c $< -o $@
 
 #foo.o: foo.c
 #	gcc -c -o foo.o foo.c

@@ -33,7 +33,7 @@ public:
                        ROT_DECREMENT=-1,
                        ROT_NC=0,
                        ROT_INCREMENT=1,
-                       ROT_SW_PUSHED=2
+                       ROT_SW_PUSHED=5
                       } RotaryStates_t;
  
     RotaryEncoder() {

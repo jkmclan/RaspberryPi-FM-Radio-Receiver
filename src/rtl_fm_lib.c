@@ -286,11 +286,26 @@ static void multiply(int ar, int aj, int br, int bj, int *cr, int *cj)
 
 static int polar_discriminant(int ar, int aj, int br, int bj)
 {
-	int cr, cj;
-	double angle;
-	multiply(ar, aj, br, -bj, &cr, &cj);
-	angle = atan2((double)cj, (double)cr);
-	return (int)(angle / 3.14159 * (1<<14));
+    /**
+     * FM Demodulator
+     *
+     * This phase discriminator FM demodulator will convert two successive input complex FM
+     * samples to a real-valued PCM sample.
+     *
+     */
+
+    int cr, cj;
+    double angle;
+
+    /* Multiply A (the current sample) by the complex conjugate of B (the prior sample),
+     * which negates the phase term in B, to calculate the phase difference in
+     * cartesion coordinates.
+     */
+    multiply(ar, aj, br, -bj, &cr, &cj);
+
+    /* Convert the phase difference from cartesion coordinates to an angle */
+    angle = atan2((double)cj, (double)cr);
+    return (int)(angle / 3.14159 * (1<<14));
 }
 
 static int fast_atan2(int y, int x)
