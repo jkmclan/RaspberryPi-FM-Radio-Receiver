@@ -42,7 +42,8 @@ private:
     RotaryEncoderEvent*  m_rotary_encoder;
     pthread_t            m_rotary_encoder_thread;
 
-    LcdI2cHD44780 m_lcd;
+    //LcdI2cHD44780 m_lcd;
+    OledI2cSH1106 m_lcd;
 
     static const int NUM_FM_FREQS = 103;
 

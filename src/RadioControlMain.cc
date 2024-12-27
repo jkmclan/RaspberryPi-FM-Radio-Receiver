@@ -16,7 +16,8 @@ Jeff McLane <jkmclane68@yahoo.com>
 
 #include "QueueThreadSafe.hh"
 #include "RotaryEncoderEvent.hh"
-#include "LcdI2cHD44780.hh"
+//#include "LcdI2cHD44780.hh"
+#include "OledI2cSH1106.hh"
 #include "rtl_fm_lib.h"
 #include "RadioControlMain.hh"
 
