@@ -85,7 +85,7 @@ bool RadioControlMain::init() {
 
     m_lcd.init();
     m_lcd.clrLcd();
-    m_lcd.typeln("RF (MHz): ");
+    //m_lcd.typeln("RF (MHz): ");
     m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
 
     return true;
@@ -129,7 +129,8 @@ void RadioControlMain::wait_for_frequency_change() {
 
     // In the LCD display
     m_lcd.lcdLoc(LINE1);
-    m_lcd.typeln("RF (MHz): ");
+    m_lcd.clrLcd();
+    //m_lcd.typeln("RF (MHz): ");
     m_lcd.typeFloat(m_fm_center_freqs_MHz[m_stn_idx]);
 
     // In the RTL-SDR dongle

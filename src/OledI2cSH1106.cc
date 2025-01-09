@@ -30,7 +30,7 @@ void OledI2cSH1106::typeInt(int val) {
 void OledI2cSH1106::typeFloat(float val) {
 
   char buffer[20];
-  sprintf(buffer, "%4.2f", val);
+  sprintf(buffer, "%4.1f", val);
   typeln(buffer);
 }
 
